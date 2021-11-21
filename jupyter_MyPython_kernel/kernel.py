@@ -29,9 +29,9 @@ import time
 
 ## Clear the code in the test area
 def _is_test_begin(line):
-    return '##test_begin' in line 
+    return line.strip().startswith('##test_begin')
 def _is_test_end(line):
-    return '##test_end' in line 
+    return line.strip().startswith('##test_end')
 
 istestcode=False
 def cleantestcode(line):
@@ -45,7 +45,7 @@ def cleantestcode(line):
 
 
 def _is_specialID(line):
-    if line.strip().startswith('//%') or line.strip().startswith('##%'):
+    if line.strip().startswith('##%') or line.strip().startswith('##%'):
         return True
     return False
 
@@ -97,17 +97,13 @@ class IREPLWrapper(replwrap.REPLWrapper):
         if timeout == -1 or timeout ==None :
             # "None" means we are executing code from a Jupyter cell by way of the run_command
             # in the do_execute() code below, so do incremental output.
-            # self.line_output_callback("\n find "+self.prompt+"\n")
             retry=0
             received=False
             cmdstart_time = time.time()
             cmdexectimeout=10
-            # self.line_output_callback("\n0expect_exact process \n")
             while True:
                 if self.startflag :
                     cmdexectimeout=None
-                    # y = time.localtime(time.time())
-                    # now_time = time.strftime('%S', y)
                     run_time = time.time() - self.start_time
                     if run_time > self.startexpecttimeout:
                         self.startflag=False
@@ -115,44 +111,38 @@ class IREPLWrapper(replwrap.REPLWrapper):
                         self.line_output_callback("\n0End of startup process\n")
                         break
                 try:
-                    pos = self.child.expect_exact(['\r\n', self.continuation_prompt, self.replsetip, pexpect.EOF, pexpect.TIMEOUT],timeout=cmdexectimeout)
-                    # pos = self.child.expect_exact(['\r\n', self.continuation_prompt,self.prompt,u'\r\n'],timeout=10)
-                    # self.line_output_callback("\nexpect_exact process :"+ str(pos) +"\n")
+                    pos = self.child.expect_exact([u'\r\n', self.continuation_prompt, self.replsetip, pexpect.EOF, pexpect.TIMEOUT],timeout=cmdexectimeout)
                     if pos == 2:
                         # End of line received
+                        if self.child.terminated:
+                            self.line_output_callback("\nprocess.terminated\n")
                         self.line_output_callback(self.child.before +self.replsetip+ '\r\n')
-                        self.line_output_callback("\n1End of startup process\n")
-                        self.replsetip='\r\n'#pexpect.EOF
-                        cmdexectimeout=10
+                        self.line_output_callback("\nEnd of startup process\n")
+                        self.replsetip=u'\r\n'
+                        cmdexectimeout=None
                         self.startflag=False
                         break
-                    elif pos == 0 or pos ==3 or pos ==4:
-                        # End of line received
+                    elif pos ==3:
                         if len(self.child.before) != 0:
                             self.line_output_callback(self.child.before + '\r\n')
-                            if not received and not self.startflag:
-                                cmdstart_time = time.time()
-                                received=True
-                            
-                        if self.startflag:
-                            continue
-                        run_time = time.time() - cmdstart_time
-                        if run_time > 10:
-                            # self.line_output_callback("\nexpect_exact exit :"+ str(retry) +"\n")
-                            break
-                        # retry=retry+1
-                        # self.line_output_callback("\nexpect_exact retry :"+ str(retry) +"\n")
+                        self.line_output_callback('The process has exited.\r\n')
+                        break
+                    elif pos == 0:
+                        self.line_output_callback(self.child.before + '\n')
+                        cmdstart_time = time.time()
                     else:
-                        self.line_output_callback("\nexpect_exact else \n")
                         if len(self.child.before) != 0:
                             # prompt received, but partial line precedes it
                             self.line_output_callback(self.child.before)
-                        # if not self.startflag :
+                            cmdstart_time = time.time()
                         else:
                             if self.startflag :
                                 continue
                             self.line_output_callback("\nexpect_exact break2 :"+ str(pos) +"\n")
-                            break
+                            run_time = time.time() - cmdstart_time
+                            if run_time > 10:
+                                break
+                            
                 except Exception as e:
                     # self.line_output_callback(self.child.before)
                     self._write_to_stderr("[MyPythonkernel] Error:Executable _expect_prompt error! "+str(e)+"\n")
@@ -368,6 +358,9 @@ class MyPythonKernel(Kernel):
 
             child = pexpect.spawn(command, args,timeout=60, echo=False,
                                   encoding='utf-8')
+            self._write_to_stdout("replchild pid:"+str(child.pid)+"\n")
+            self._write_to_stdout("--------process info---------\n")
+
             self.replwrapper = IREPLWrapper(
                                     self._write_to_stdout,
                                     self._write_to_stderr,
@@ -378,17 +371,20 @@ class MyPythonKernel(Kernel):
                                     prompt_change=None,
                                     extra_init_cmd=None,
                                     line_output_callback=self.process_output)
-            self._write_to_stdout("replchild pid:"+str(self.replwrapper.child.pid)+"\n")
+            # self._write_to_stdout("replchild pid:"+str(self.replwrapper.child.pid)+"\n")
             self.g_rtsps[str(self.replwrapper.child.pid)]=self.replwrapper
+            
         except Exception as e:
             self._write_to_stderr("[MyPythonkernel] Error:Executable _start_replprg error! "+str(e)+"\n")
 
         finally:
             signal.signal(signal.SIGINT, sig)
 
-    def process_output(self, output):
+    def process_output(self, output,magics=None):
         if not self.silent:
-
+            if magics !=None and len(magics['outputtype'])>0:
+                self._write_display_data(mimetype=magics['outputtype'],contents=output)
+                return
             # Send standard output
             stream_content = {'name': 'stdout', 'text': output}
             self.send_response(self.iopub_socket, 'stream', stream_content)
@@ -406,7 +402,8 @@ class MyPythonKernel(Kernel):
             # output.  Also note that the return value from
             # run_command is not needed, because the output was
             # already sent by IREPLWrapper.
-            # self._write_to_stdout("send replcmd:"+code.rstrip()+"\n")
+            self._write_to_stdout("send replcmd:"+code.rstrip()+"\n")
+            self._write_to_stdout("---Received information after send repl cmd---\n")
             if magics and len(magics['replchildpid'])>0 :
                 if self.g_rtsps[magics['replchildpid']] and \
                     self.g_rtsps[magics['replchildpid']].child and \
@@ -614,10 +611,11 @@ class MyPythonKernel(Kernel):
                   'args': []}
 
         actualCode = ''
+        newactualCode = ''
 
         for line in code.splitlines():
             orgline=line
-            line=cleantestcode(line)
+            # line=cleantestcode(line)
             if _is_specialID(line):
                 if line.strip()[3:] == "noruncode":
                     magics['noruncode'] += ['true']
@@ -712,8 +710,11 @@ class MyPythonKernel(Kernel):
             # keep lines which did not contain magics
             else:
                 actualCode += line + '\n'
-
-        return magics, actualCode
+        if len(magics['file'])>0 and len(magics['noruncode'])>0:
+            for line in actualCode.splitlines():
+                line=cleantestcode(line)
+                newactualCode += line
+        return magics, newactualCode
 
     def _add_main(self, magics, code):
         # remove comments
