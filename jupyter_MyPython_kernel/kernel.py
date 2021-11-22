@@ -138,7 +138,6 @@ class IREPLWrapper(replwrap.REPLWrapper):
                         else:
                             if self.startflag :
                                 continue
-                            self.line_output_callback("\nexpect_exact break2 :"+ str(pos) +"\n")
                             run_time = time.time() - cmdstart_time
                             if run_time > 10:
                                 break
@@ -233,7 +232,7 @@ class MyPythonKernel(Kernel):
     implementation = 'jupyter-MyPython-kernel'
     implementation_version = '1.0'
     language = 'Python'
-    language_version = 'C11'
+    language_version = sys.version.split()[0]
     language_info = {'name': 'python',
                      'version': sys.version.split()[0],
                      'mimetype': 'text/x-python',
@@ -246,13 +245,14 @@ class MyPythonKernel(Kernel):
                      'file_extension': '.py'}
     banner = "MyPython kernel.\n" \
              "Uses gcc, compiles in C11, and creates source code files and executables in temporary folder.\n"
-
+    kernelinfo="[MyPython]"
     main_head = "\n" \
             "\n" \
             "int main(List<String> arguments){\n"
 
     main_foot = "\nreturn 0;\n}"
 
+    silent=None
     g_rtsps={}
     g_chkreplexit=True
     def __init__(self, *args, **kwargs):
@@ -317,6 +317,26 @@ class MyPythonKernel(Kernel):
         file = tempfile.NamedTemporaryFile(**kwargs)
         self.files.append(file.name)
         return file
+
+    def _log(self, output,level=1,outputtype='text/plain'):
+        streamname='stdout'
+        if not self.silent:
+            prestr=self.kernelinfo+' Info:'
+            if level==2:
+                prestr=self.kernelinfo+' Warning:'
+                streamname='stderr'
+            elif level==3:
+                prestr=self.kernelinfo+' Error:'
+                streamname='stderr'
+            else:
+                prestr=self.kernelinfo+' Info:'
+                streamname='stdout'
+            if len(outputtype)>0 and (level!=2 or level!=3):
+                self._write_display_data(mimetype=outputtype,contents=prestr+output)
+                return
+            # Send standard output
+            stream_content = {'name': streamname, 'text': prestr+output}
+            self.send_response(self.iopub_socket, 'stream', stream_content)
 
     def _write_display_data(self,mimetype='text/html',contents=""):
 
@@ -725,7 +745,7 @@ class MyPythonKernel(Kernel):
 
         if not x:
             code = self.main_head + code + self.main_foot
-            magics['cflags'] += ['-v','error']
+            magics['cflags'] += ['-lm']
 
         return magics, code
 
