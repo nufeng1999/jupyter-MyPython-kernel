@@ -45,7 +45,7 @@ def cleantestcode(line):
 
 
 def _is_specialID(line):
-    if line.strip().startswith('##%') or line.strip().startswith('##%'):
+    if line.strip().startswith('##%') or line.strip().startswith('//%'):
         return True
     return False
 
@@ -253,6 +253,7 @@ class MyPythonKernel(Kernel):
     main_foot = "\nreturn 0;\n}"
 
     silent=None
+    jinja2_env = Environment()
     g_rtsps={}
     g_chkreplexit=True
     def __init__(self, *args, **kwargs):
@@ -610,6 +611,7 @@ class MyPythonKernel(Kernel):
                   'file': [],
                   'overwritefile': [],
                   'include': [],
+                  'templatefile': [],
 
                   'repllistpid': [],
                   'replcmdmode': [],
@@ -688,6 +690,22 @@ class MyPythonKernel(Kernel):
                         index1=line.find('##%')
                         line=self.readcodefile(magics['include'],index1)
                         actualCode += line + '\n'
+                elif key == "templatefile":
+                    index1=line.find('//%')
+                    if len(value)>0:
+                        magics[key] =value.split(" ",1)
+                    else:
+                        magics[key] =None
+                        continue
+                    templatefile=magics['templatefile'][0]
+                    if len(magics['templatefile'])>1:
+                        argsstr=magics['templatefile'][1]
+                        templateargsdict=_filter_dict(argsstr)
+                    else:
+                        templateargsdict=None
+                    if len(magics['templatefile'])>0:
+                        line=self.readtemplatefile(templatefile,index1,templateargsdict)
+                        actualCode += line + '\n'
                 elif key == "pidcmd":
                     magics['pidcmd'] = [value]
                     if len(magics['pidcmd'])>0:
@@ -730,7 +748,9 @@ class MyPythonKernel(Kernel):
             # keep lines which did not contain magics
             else:
                 actualCode += line + '\n'
+        newactualCode=actualCode
         if len(magics['file'])>0 and len(magics['noruncode'])>0:
+            newactualCode=''
             for line in actualCode.splitlines():
                 line=cleantestcode(line)
                 newactualCode += line
