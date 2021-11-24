@@ -1,16 +1,9 @@
-###%file:kernel.py
-#
-#   MyPython Jupyter Kernel
-#
-
 from math import exp
 from queue import Queue
 from threading import Thread
-
 from ipykernel.kernelbase import Kernel
 from pexpect import replwrap, EOF
 from jinja2 import Environment, PackageLoader, select_autoescape
-
 import pexpect
 import signal
 import typing 
@@ -25,59 +18,10 @@ import traceback
 import os.path as path
 import codecs
 import time
-
-
-## Clear the code in the test area
-def _is_test_begin(line):
-    return line.strip().startswith('##test_begin')
-def _is_test_end(line):
-    return line.strip().startswith('##test_end')
-
-istestcode=False
-def cleantestcode(line):
-    global istestcode
-    istb=_is_test_begin(line)
-    iste=_is_test_end(line)
-    if istb:istestcode=True
-    if iste:istestcode=False
-    line= "" if istestcode else line+"\n"
-    return line
-
-
-def _is_specialID(line):
-    if line.strip().startswith('##%') or line.strip().startswith('//%'):
-        return True
-    return False
-
-usleep = lambda x: time.sleep(x/1000000.0)
-
-def replacemany(our_str, to_be_replaced:str, replace_with:str):
-    while (to_be_replaced in our_str):
-        our_str = our_str.replace(to_be_replaced, replace_with)
-    return our_str
-
-def _filter_dict(argsstr):
-    if not argsstr or len(argsstr.strip())<1:
-        return None
-    env_dict={}
-    argsstr=replacemany(replacemany(replacemany(argsstr.strip(),('  '),' '),('= '),'='),' =','=')
-    envstr=str(str(argsstr.split(" ")).split("=")).replace(" ","").replace("\'","").replace("\"","").replace("[","").replace("]","").replace("\\","")
-    env_list=envstr.split(",")
-    for i in range(0,len(env_list),2):
-        env_dict[str(env_list[i])]=env_list[i+1]
-    return env_dict
-
-
+import importlib
+import importlib.util
+import inspect
 class IREPLWrapper(replwrap.REPLWrapper):
-    """A subclass of REPLWrapper that gives incremental output
-    specifically for gdb_kernel.
-
-    The parameters are the same as for REPLWrapper, except for one
-    extra parameter:
-
-    :param line_output_callback: a callback method to receive each batch
-      of incremental output. It takes one string parameter.
-    """
     def __init__(self, write_to_stdout, write_to_stderr, read_from_stdin,
                 cmd_or_spawn,replsetip, orig_prompt, prompt_change,
                 extra_init_cmd=None, line_output_callback=None):
@@ -88,15 +32,11 @@ class IREPLWrapper(replwrap.REPLWrapper):
         self.replsetip=replsetip
         self.startflag=True
         self.startexpecttimeout=60
-        # x = time.localtime(time.time())
         self.start_time = time.time()
         replwrap.REPLWrapper.__init__(self, cmd_or_spawn, orig_prompt,
                                       prompt_change,extra_init_cmd=extra_init_cmd)
- 
     def _expect_prompt(self, timeout=-1):
         if timeout == -1 or timeout ==None :
-            # "None" means we are executing code from a Jupyter cell by way of the run_command
-            # in the do_execute() code below, so do incremental output.
             retry=0
             received=False
             cmdstart_time = time.time()
@@ -113,7 +53,6 @@ class IREPLWrapper(replwrap.REPLWrapper):
                 try:
                     pos = self.child.expect_exact([u'\r\n', self.continuation_prompt, self.replsetip, pexpect.EOF, pexpect.TIMEOUT],timeout=cmdexectimeout)
                     if pos == 2:
-                        # End of line received
                         if self.child.terminated:
                             self.line_output_callback("\nprocess.terminated\n")
                         self.line_output_callback(self.child.before +self.replsetip+ '\r\n')
@@ -132,7 +71,6 @@ class IREPLWrapper(replwrap.REPLWrapper):
                         cmdstart_time = time.time()
                     else:
                         if len(self.child.before) != 0:
-                            # prompt received, but partial line precedes it
                             self.line_output_callback(self.child.before)
                             cmdstart_time = time.time()
                         else:
@@ -141,61 +79,33 @@ class IREPLWrapper(replwrap.REPLWrapper):
                             run_time = time.time() - cmdstart_time
                             if run_time > 10:
                                 break
-                            
                 except Exception as e:
-                    # self.line_output_callback(self.child.before)
                     self._write_to_stderr("[MyPythonkernel] Error:Executable _expect_prompt error! "+str(e)+"\n")
         else:
-            # Otherwise, use existing non-incremental code
             pos = replwrap.REPLWrapper._expect_prompt(self, timeout=timeout)
-        # Prompt received, so return normally
         return pos
-
 class RealTimeSubprocess(subprocess.Popen):
-    """
-    A subprocess that allows to read its stdout and stderr in real time
-    """
-
     inputRequest = "<inputRequest>"
-
     def __init__(self, cmd, write_to_stdout, write_to_stderr, read_from_stdin,cwd=None,shell=False,env=None):
-        """
-        :param cmd: the command to execute
-        :param write_to_stdout: a callable that will be called with chunks of data from stdout
-        :param write_to_stderr: a callable that will be called with chunks of data from stderr
-        """
         self._write_to_stdout = write_to_stdout
         self._write_to_stderr = write_to_stderr
         self._read_from_stdin = read_from_stdin
-        
         super().__init__(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE,
                             bufsize=0,cwd=cwd,shell=shell,env=env)
-
         self._stdout_queue = Queue()
         self._stdout_thread = Thread(target=RealTimeSubprocess._enqueue_output, args=(self.stdout, self._stdout_queue))
         self._stdout_thread.daemon = True
         self._stdout_thread.start()
-
         self._stderr_queue = Queue()
         self._stderr_thread = Thread(target=RealTimeSubprocess._enqueue_output, args=(self.stderr, self._stderr_queue))
         self._stderr_thread.daemon = True
         self._stderr_thread.start()
-
     @staticmethod
     def _enqueue_output(stream, queue):
-        """
-        Add chunks of data from a stream to a queue until the stream is empty.
-        """
         for line in iter(lambda: stream.read(4096), b''):
             queue.put(line)
         stream.close()
-
     def write_contents(self,magics=None):
-        """
-        Write the available content from stdin and stderr where specified when the instance was created
-        :return:
-        """
-
         def read_all_from_queue(queue):
             res = b''
             size = queue.qsize()
@@ -206,12 +116,9 @@ class RealTimeSubprocess(subprocess.Popen):
         stderr_contents = read_all_from_queue(self._stderr_queue)
         if stderr_contents:
             self._write_to_stderr(stderr_contents.decode())
-
         stdout_contents = read_all_from_queue(self._stdout_queue)
         if stdout_contents:
             contents = stdout_contents.decode()
-            # if there is input request, make output and then
-            # ask frontend for input
             start = contents.find(self.__class__.inputRequest)
             if(start >= 0):
                 contents = contents.replace(self.__class__.inputRequest, '')
@@ -220,14 +127,10 @@ class RealTimeSubprocess(subprocess.Popen):
                 readLine = ""
                 while(len(readLine) == 0):
                     readLine = self._read_from_stdin()
-                # need to add newline since it is not captured by frontend
                 readLine += "\n"
                 self.stdin.write(readLine.encode())
             else:
                 self._write_to_stdout(contents,magics)
-
-
-
 class MyPythonKernel(Kernel):
     implementation = 'jupyter-MyPython-kernel'
     implementation_version = '1.0'
@@ -249,9 +152,17 @@ class MyPythonKernel(Kernel):
     main_head = "\n" \
             "\n" \
             "int main(List<String> arguments){\n"
-
     main_foot = "\nreturn 0;\n}"
-
+    plugins={"0":[],
+         "1":[],
+         "2":[],
+         "3":[],
+         "4":[],
+         "5":[],
+         "6":[],
+         "7":[],
+         "8":[],
+         "9":[]}
     silent=None
     jinja2_env = Environment()
     g_rtsps={}
@@ -266,11 +177,123 @@ class MyPythonKernel(Kernel):
         self.wError = False # but keep comipiling for warnings
         self.files = []
         self.resDir = path.join(path.dirname(path.realpath(__file__)), 'resources')
-
         self.chk_replexit_thread = Thread(target=self.chk_replexit, args=(self.g_rtsps))
         self.chk_replexit_thread.daemon = True
         self.chk_replexit_thread.start()
-    
+    def _is_jj2_begin(self,line):
+        if line==None or line=='':return ''
+        return line.strip().startswith('##jj2_begin') or line.strip().startswith('//jj2_begin')
+    def _is_jj2_end(self,line):
+        if line==None or line=='':return ''
+        return line.strip().startswith('##jj2_end') or line.strip().startswith('//jj2_end')
+    def _is_test_begin(self,line):
+        if line==None or line=='':return ''
+        return line.strip().startswith('##test_begin') or line.strip().startswith('//test_begin')
+    def _is_test_end(self,line):
+        if line==None or line=='':return ''
+        return line.strip().startswith('##test_end') or line.strip().startswith('//test_end')
+    def _is_dqm_begin(self,line):
+        if line==None or line=='':return ''
+        return line.lstrip().startswith('\"\"\"')
+    def _is_dqm_end(self,line):
+        if line==None or line=='':return ''
+        return line.rstrip().endswith('\"\"\"')
+    def _is_sqm_begin(self,line):
+        if line==None or line=='':return ''
+        return line.lstrip().startswith('\'\'\'')
+    def _is_sqm_end(self,line):
+        if line==None or line=='':return ''
+        return line.rstrip().endswith('\'\'\'')
+    jj2list=[]
+    isjj2code=False
+    def addjj2codeline(self,line):
+        self.jj2list+=[line]
+    def getjj2code(self):
+        code=' '.join(self.jj2list)
+        return code
+    def execjj2code(self,code):
+        env = Environment()
+        return
+    def forcejj2code(self,line): 
+        istb=self._is_jj2_begin(line)
+        iste=self._is_jj2_end(line)
+        if istb:self.isjj2code=True
+        if iste:
+            self.isjj2code=False
+            jj2code=self.getjj2code()
+            line=self.execjj2code(jj2code)
+        if self.isjj2code: self.addjj2codeline(line)
+        line= "" if self.isjj2code else line+"\n"
+        return line
+    def cleannotes(self,line):
+        return '' if (not self._is_specialID(line)) and (line.lstrip().startswith('#') or line.lstrip().startswith('//')) else line
+    isdqm=False
+    def cleandqm(self,line):
+        if not self.isdqm:
+            istb=self._is_dqm_begin(line)
+            if istb: 
+                self.isdqm=True
+                if len(line.strip())>5:
+                    iste=self._is_dqm_end(line)
+                    if iste:self.isdqm=False
+                return ''
+        iste=self._is_dqm_end(line)
+        if iste:
+            self.isdqm=False
+            return ''
+        line= "" if self.isdqm else line
+        return line
+    issqm=False
+    def cleansqm(self,line):
+        if not self.issqm:
+            istb=self._is_sqm_begin(line)
+            if istb: 
+                self.issqm=True
+                if len(line.strip())>5:
+                    iste=self._is_sqm_end(line)
+                    if iste:self.issqm=False
+                return ''
+        iste=self._is_sqm_end(line)
+        if iste:
+            self.issqm=False
+            return ''
+        line= "" if self.issqm else line
+        return line
+    istestcode=False
+    def cleantestcode(self,line):
+        if not self.istestcode:
+            istb=self._is_test_begin(line)
+            if istb: 
+                self.istestcode=True
+                if len(line.strip())>5:
+                    iste=self._is_test_end(line)
+                    if iste:self.istestcode=False
+                return ''
+        iste=self._is_test_end(line)
+        if iste:
+            self.istestcode=False
+            return ''
+        line= "" if self.istestcode else line
+        return line
+    usleep = lambda x: time.sleep(x/1000000.0)
+    def replacemany(self,our_str, to_be_replaced:str, replace_with:str):
+        while (to_be_replaced in our_str):
+            our_str = our_str.replace(to_be_replaced, replace_with)
+        return our_str
+    def _filter_dict(self,argsstr):
+        if not argsstr or len(argsstr.strip())<1:
+            return None
+        env_dict={}
+        argsstr=self.replacemany(self.replacemany(self.replacemany(argsstr.strip(),('  '),' '),('= '),'='),' =','=')
+        envstr=str(str(argsstr.split(" ")).split("=")).replace(" ","").replace("\'","").replace("\"","").replace("[","").replace("]","").replace("\\","")
+        env_list=envstr.split(",")
+        for i in range(0,len(env_list),2):
+            env_dict[str(env_list[i])]=env_list[i+1]
+        return env_dict
+    def _is_specialID(self,line):
+        if line.strip().startswith('##%') or line.strip().startswith('//%'):
+            return True
+        return False
     def repl_listpid(self):
         if len(self.g_rtsps)>0: 
             self._write_to_stdout("--------All replpid--------\n")
@@ -278,7 +301,6 @@ class MyPythonKernel(Kernel):
                 self._write_to_stdout(key+"\n")
         else:
             self._write_to_stdout("--------All replpid--------\nNone\n")
-
     def chk_replexit(grtsps): 
         while MyPythonKernel.g_chkreplexit:
             try:
@@ -287,8 +309,6 @@ class MyPythonKernel(Kernel):
                         if grtsps[key].child.terminated:
                             pass
                             del grtsps[key]
-                        # else:
-                        #     grtsps[key].write_contents()
             finally:
                 pass
         if len(grtsps)>0: 
@@ -299,26 +319,16 @@ class MyPythonKernel(Kernel):
                 else:
                     grtsps[key].child.terminate(force=True)
                     del grtsps[key]
-    
-
     def cleanup_files(self):
-        """Remove all the temporary files created by the kernel"""
-        # keep the list of files create in case there is an exception
-        # before they can be deleted as usual
         for file in self.files:
             if(os.path.exists(file)):
                 os.remove(file)
-
-
     def new_temp_file(self, **kwargs):
-        """Create a new temp file to be deleted when the kernel shuts down"""
-        # We don't want the file to be deleted when closed, but only when the kernel stops
         kwargs['delete'] = False
         kwargs['mode'] = 'w'
         file = tempfile.NamedTemporaryFile(**kwargs)
         self.files.append(file.name)
         return file
-
     def _log(self, output,level=1,outputtype='text/plain'):
         streamname='stdout'
         if not self.silent:
@@ -335,26 +345,19 @@ class MyPythonKernel(Kernel):
             if len(outputtype)>0 and (level!=2 or level!=3):
                 self._write_display_data(mimetype=outputtype,contents=prestr+output)
                 return
-            # Send standard output
             stream_content = {'name': streamname, 'text': prestr+output}
             self.send_response(self.iopub_socket, 'stream', stream_content)
-
     def _write_display_data(self,mimetype='text/html',contents=""):
-
         self.send_response(self.iopub_socket, 'display_data', {'data': {mimetype:contents}, 'metadata': {mimetype:{}}})
-
     def _write_to_stdout(self,contents,magics=None):
         if magics !=None and len(magics['outputtype'])>0:
             self._write_display_data(mimetype=magics['outputtype'],contents=contents)
         else:
             self.send_response(self.iopub_socket, 'stream', {'name': 'stdout', 'text': contents})
-
     def _write_to_stderr(self, contents):
         self.send_response(self.iopub_socket, 'stream', {'name': 'stderr', 'text': contents})
-
     def _read_from_stdin(self):
         return self.raw_input()
-
     def readcodefile(self,filename,spacecount=0):
         filecode=''
         codelist1=None
@@ -366,22 +369,14 @@ class MyPythonKernel(Kernel):
             for t in codelist1:
                 filecode+=' '*spacecount + t
         return filecode
-
-    #####################################################################
     def _start_replprg(self,command,args,magics):
-        # Signal handlers are inherited by forked processes, and we can't easily
-        # reset it from the subprocess. Since kernelapp ignores SIGINT except in
-        # message handlers, we need to temporarily reset the SIGINT handler here
-        # so that bash and its children are interruptible.
         sig = signal.signal(signal.SIGINT, signal.SIG_DFL)
         self.silent = None
         try:
-
             child = pexpect.spawn(command, args,timeout=60, echo=False,
                                   encoding='utf-8')
             self._write_to_stdout("replchild pid:"+str(child.pid)+"\n")
             self._write_to_stdout("--------process info---------\n")
-
             self.replwrapper = IREPLWrapper(
                                     self._write_to_stdout,
                                     self._write_to_stderr,
@@ -392,37 +387,26 @@ class MyPythonKernel(Kernel):
                                     prompt_change=None,
                                     extra_init_cmd=None,
                                     line_output_callback=self.process_output)
-            # self._write_to_stdout("replchild pid:"+str(self.replwrapper.child.pid)+"\n")
             self.g_rtsps[str(self.replwrapper.child.pid)]=self.replwrapper
-            
         except Exception as e:
             self._write_to_stderr("[MyPythonkernel] Error:Executable _start_replprg error! "+str(e)+"\n")
-
         finally:
             signal.signal(signal.SIGINT, sig)
-
     def process_output(self, output,magics=None):
         if not self.silent:
             if magics !=None and len(magics['outputtype'])>0:
                 self._write_display_data(mimetype=magics['outputtype'],contents=output)
                 return
-            # Send standard output
             stream_content = {'name': 'stdout', 'text': output}
             self.send_response(self.iopub_socket, 'stream', stream_content)
-
     def send_replcmd(self, code, silent, store_history=True,
                    user_expressions=None, allow_stdin=False,magics=None):
         self.silent = silent
         if not code.strip():
             return {'status': 'ok', 'execution_count': self.execution_count,
                     'payload': [], 'user_expressions': {}}
-
         interrupted = False
         try:
-            # Note: timeout=None tells IREPLWrapper to do incremental
-            # output.  Also note that the return value from
-            # run_command is not needed, because the output was
-            # already sent by IREPLWrapper.
             self._write_to_stdout("send replcmd:"+code.rstrip()+"\n")
             self._write_to_stdout("---Received information after send repl cmd---\n")
             if magics and len(magics['replchildpid'])>0 :
@@ -443,34 +427,20 @@ class MyPythonKernel(Kernel):
             output = self.gdbwrapper.child.before
             self.process_output(output)
         except EOF:
-            # output = self.gdbwrapper.child.before + 'Restarting GDB'
-            # self._start_gdb()
-            # self.process_output(output)
             pass
-
         if interrupted:
             return {'status': 'abort', 'execution_count': self.execution_count}
-
-        # try:
-        #     exitcode = int(self.replwrapper.run_command('echo $?').rstrip())
-        # except Exception as e:
-        #     self.process_output("[MyPythonkernel] Error:Executable send_replcmd error! "+str(e)+"\n")
         exitcode = 0
-
         if exitcode:
             error_content = {'execution_count': self.execution_count,
                              'ename': '', 'evalue': str(exitcode), 'traceback': []}
-
             self.send_response(self.iopub_socket, 'error', error_content)
             error_content['status'] = 'error'
             return error_content
         else:
             return {'status': 'ok', 'execution_count': self.execution_count,
                     'payload': [], 'user_expressions': {}}
-
-    #####################################################################
     def do_shell_command(self,commands,cwd=None,shell=True,env=True,magics=None):
-        # self._write_to_stdout(''.join((' '+ str(s) for s in commands)))
         try:
             if len(magics['replcmdmode'])>0:
                 findObj= commands[0].split(" ",1)
@@ -493,7 +463,6 @@ class MyPythonKernel(Kernel):
                 self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
             while p.poll() is None:
                 p.write_contents()
-            # wait for threads to finish, so output is always shown
             p._stdout_thread.join()
             p._stderr_thread.join()
             del self.g_rtsps[str(p.pid)]
@@ -505,8 +474,6 @@ class MyPythonKernel(Kernel):
             return
         except Exception as e:
             self._write_to_stderr("[MyPythonkernel] Error:Executable command error! "+str(e)+"\n")
-
-    
     def do_Py_command(self,commands=None,cwd=None,magics=None):
         p = self.create_jupyter_subprocess(['MyPythonKernel']+commands,cwd=os.path.abspath(''),shell=False)
         self.g_rtsps[str(p.pid)]=p
@@ -514,19 +481,15 @@ class MyPythonKernel(Kernel):
             self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
         while p.poll() is None:
             p.write_contents()
-        # wait for threads to finish, so output is always shown
         p._stdout_thread.join()
         p._stderr_thread.join()
         del self.g_rtsps[str(p.pid)]
         p.write_contents()
-
         if p.returncode != 0:
             self._write_to_stderr("[MyPythonkernel] Executable exited with code {}".format(p.returncode))
         else:
             self._write_to_stdout("[MyPythonkernel] Info:MyPythonKernel command success.")
         return
-
-    
     def do_flutter_command(self,commands=None,cwd=None,magics=None):
         p = self.create_jupyter_subprocess(['flutter']+commands,cwd=os.path.abspath(''),shell=False)
         self.g_rtsps[str(p.pid)]=p
@@ -534,31 +497,21 @@ class MyPythonKernel(Kernel):
             self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
         while p.poll() is None:
             p.write_contents()
-        # wait for threads to finish, so output is always shown
         p._stdout_thread.join()
         p._stderr_thread.join()
         del self.g_rtsps[str(p.pid)]
         p.write_contents()
-
         if p.returncode != 0:
             self._write_to_stderr("[MyPythonkernel] Executable exited with code {}".format(p.returncode))
         else:
             self._write_to_stdout("[MyPythonkernel] Info:flutter command success.")
         return
-
-    
     def send_cmd(self,pid,cmd):
         try:
-            # self._write_to_stdout("send cmd PID:"+pid+"\n cmd:"+cmd)
-            # if self.g_rtsps.has_key(pid):
-                # self._write_to_stderr("[MyPythonkernel] Info:exist! "+pid+"\n")
-            # self.g_rtsps[pid].stdin.write(cmd.encode())
             self.g_rtsps[pid]._write_to_stdout(cmd)
         except Exception as e:
             self._write_to_stderr("[MyPythonkernel] Error:Executable send_cmd error! "+str(e)+"\n")
-    
         return
-
     def create_jupyter_subprocess(self, cmd,cwd=None,shell=False,env=None):
         try:
             return RealTimeSubprocess(cmd,
@@ -568,33 +521,8 @@ class MyPythonKernel(Kernel):
         except Exception as e:
             self._write_to_stdout("RealTimeSubprocess err:"+str(e))
             raise
-
     def generate_Pythonfile(self, source_filename, binary_filename, cflags=None, ldflags=None):
-
         return
-
-    def compile_with_Python2native(self, source_filename, binary_filename, cflags=None, ldflags=None):
-        # cflags = ['-std=c89', '-pedantic', '-fPIC', '-shared', '-rdynamic'] + cflags
-        # cflags = ['-std=c99', '-Wdeclaration-after-statement', '-Wvla', '-fPIC', '-shared', '-rdynamic'] + cflags
-        # cflags = ['-std=iso9899:199409', '-pedantic', '-fPIC', '-shared', '-rdynamic'] + cflags
-        # cflags = ['-std=c99', '-pedantic', '-fPIC', '-shared', '-rdynamic'] + cflags
-        # cflags = ['-std=c11', '-pedantic', '-fPIC','-pie', '-rdynamic'] + cflags
-        outfile=None
-        #binary_filename='/root/mytestc.out'
-        # if self.linkMaths:
-        #     cflags = cflags + ['-lm']
-        # if self.wError:
-        #     cflags = cflags + ['-Werror']
-        # if self.wAll:
-        #     cflags = cflags + ['-Wall']
-        #if ('-o' not in cflags):
-            #binary_filename=cflags[cflags.index('-o')+1]
-        #else:
-        outfile= ['-o', binary_filename]
-        args = ['MyPythonKernel','compile', 'exe', source_filename] + cflags + outfile + ldflags
-        # for x in args: self._write_to_stderr(" " + x + " ")
-        return self.create_jupyter_subprocess(args)
-
     def _filter_env(self, envstr):
         if envstr is None or len(envstr.strip())<1:
             return os.environ
@@ -603,22 +531,18 @@ class MyPythonKernel(Kernel):
         for i in range(0,len(env_list),2):
             os.environ.setdefault(env_list[i],env_list[i+1])
         return os.environ
-
     def _filter_magics(self, code):
-
         magics = {'cflags': [],
                   'ldflags': [],
                   'file': [],
                   'overwritefile': [],
                   'include': [],
                   'templatefile': [],
-
                   'repllistpid': [],
                   'replcmdmode': [],
                   'replprompt': [],
                   'replsetip': "\r\n",
                   'replchildpid':"0",
-
                   'showpid': [],
                   'norunnotecmd': [],
                   'noruncode': [],
@@ -631,14 +555,13 @@ class MyPythonKernel(Kernel):
                   'pid': [],
                   'pidcmd': [],
                   'args': []}
-
         actualCode = ''
         newactualCode = ''
-
         for line in code.splitlines():
             orgline=line
-            # line=cleantestcode(line)
-            if _is_specialID(line):
+            line=self.forcejj2code(line)
+            if line==None or line.strip()=='': continue
+            if self._is_specialID(line):
                 if line.strip()[3:] == "noruncode":
                     magics['noruncode'] += ['true']
                     continue
@@ -666,7 +589,6 @@ class MyPythonKernel(Kernel):
                     continue
                 key, value = line.strip()[3:].split(":", 2)
                 key = key.strip().lower()
-
                 if key in ['ldflags', 'cflags']:
                     for flag in value.split():
                         magics[key] += [flag]
@@ -700,7 +622,7 @@ class MyPythonKernel(Kernel):
                     templatefile=magics['templatefile'][0]
                     if len(magics['templatefile'])>1:
                         argsstr=magics['templatefile'][1]
-                        templateargsdict=_filter_dict(argsstr)
+                        templateargsdict=self._filter_dict(argsstr)
                     else:
                         templateargsdict=None
                     if len(magics['templatefile'])>0:
@@ -738,37 +660,32 @@ class MyPythonKernel(Kernel):
                 elif key == "outputtype":
                     magics[key]=value
                 elif key == "args":
-                    # Split arguments respecting quotes
                     for argument in re.findall(r'(?:[^\s,"]|"(?:\\.|[^"])*")+', value):
                         magics['args'] += [argument.strip('"')]
-
-                # always add empty line, so line numbers don't change
-                # actualCode += '\n'
-
-            # keep lines which did not contain magics
             else:
                 actualCode += line + '\n'
         newactualCode=actualCode
         if len(magics['file'])>0 and len(magics['noruncode'])>0:
             newactualCode=''
             for line in actualCode.splitlines():
-                line=cleantestcode(line)
-                newactualCode += line
+                line=self.cleantestcode(line)
+                if line=='':continue
+                line=self.cleandqm(line)
+                if line=='':continue
+                line=self.cleansqm(line)
+                if self.cleannotes(line)=='':
+                    continue
+                else:
+                    newactualCode += line + '\n'
         return magics, newactualCode
-
     def _add_main(self, magics, code):
-        # remove comments
         tmpCode = re.sub(r"//.*", "", code)
         tmpCode = re.sub(r"/\*.*?\*/", "", tmpCode, flags=re.M|re.S)
-
         x = re.search(r".*\s+main\s*\(", tmpCode)
-
         if not x:
             code = self.main_head + code + self.main_foot
             magics['cflags'] += ['-lm']
-
         return magics, code
-
     def do_execute(self, code, silent, store_history=True,
                    user_expressions=None, allow_stdin=True):
         try:
@@ -779,8 +696,6 @@ class MyPythonKernel(Kernel):
                     user_expressions=None, allow_stdin=False)
             if len(magics['noruncode'])>0 and ( len(magics['command'])>0 or len(magics['pythoncmd'])>0):
                 return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
-            # if len(magics['file'])<1:
-            #     magics, code = self._add_main(magics, code)
             with self.new_temp_file(suffix='.py',dir=os.path.abspath('')) as source_file:
                 source_file.write(code)
                 source_file.flush()
@@ -799,30 +714,22 @@ class MyPythonKernel(Kernel):
                 return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
             self._write_to_stdout("The process :"+newsrcfilename+"\n")
             p = self.create_jupyter_subprocess(['python',newsrcfilename]+ magics['args'],cwd=None,shell=False,env=magics['env'])
-            #p = self.create_jupyter_subprocess([binary_file.name]+ magics['args'],cwd=None,shell=False)
-            #p = self.create_jupyter_subprocess([self.master_path, binary_file.name] + magics['args'],cwd='/tmp',shell=True)
             self.g_rtsps[str(p.pid)]=p
             if len(magics['showpid'])>0:
                 self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
             while p.poll() is None:
                 p.write_contents(magics)
             self._write_to_stdout("The process end:"+str(p.pid)+"\n")
-            # wait for threads to finish, so output is always shown
             p._stdout_thread.join()
             p._stderr_thread.join()
-            # del self.g_rtsps[str(p.pid)]
             p.write_contents(magics)
-
             self.cleanup_files()
             if p.returncode != 0:
                 self._write_to_stderr("[MyPythonkernel] Executable exited with code {}".format(p.returncode))
         except Exception as e:
             self._write_to_stderr("[MyPythonkernel] Error "+str(e))
         return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
-
     def do_shutdown(self, restart):
         self.g_chkreplexit=False
         self.chk_replexit_thread.join()
-        """Cleanup the created source code files and executables when shutting down the kernel"""
         self.cleanup_files()
-
