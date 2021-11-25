@@ -3,7 +3,7 @@ from queue import Queue
 from threading import Thread
 from ipykernel.kernelbase import Kernel
 from pexpect import replwrap, EOF
-from jinja2 import Environment, PackageLoader, select_autoescape
+from jinja2 import Environment, PackageLoader, select_autoescape,Template
 import pexpect
 import signal
 import typing 
@@ -180,6 +180,19 @@ class MyPythonKernel(Kernel):
         self.chk_replexit_thread = Thread(target=self.chk_replexit, args=(self.g_rtsps))
         self.chk_replexit_thread.daemon = True
         self.chk_replexit_thread.start()
+    def __init__(self, *args, **kwargs):
+        super(MyPythonKernel, self).__init__(*args, **kwargs)
+        self._allow_stdin = True
+        self.readOnlyFileSystem = False
+        self.bufferedOutput = True
+        self.linkMaths = True # always link math library
+        self.wAll = True # show all warnings by default
+        self.wError = False # but keep comipiling for warnings
+        self.files = []
+        self.resDir = path.join(path.dirname(path.realpath(__file__)), 'resources')
+        self.chk_replexit_thread = Thread(target=self.chk_replexit, args=(self.g_rtsps))
+        self.chk_replexit_thread.daemon = True
+        self.chk_replexit_thread.start()
     def _is_jj2_begin(self,line):
         if line==None or line=='':return ''
         return line.strip().startswith('##jj2_begin') or line.strip().startswith('//jj2_begin')
@@ -204,24 +217,49 @@ class MyPythonKernel(Kernel):
     def _is_sqm_end(self,line):
         if line==None or line=='':return ''
         return line.rstrip().endswith('\'\'\'')
-    jj2list=[]
+    jj2code_cache=[]
+    jj2code_args={}
     isjj2code=False
+    def cleanjj2code_cache(self,):
+        self.jj2code_cache.clear()
+        self.jj2code_args={}
     def addjj2codeline(self,line):
-        self.jj2list+=[line]
+        self.jj2code_cache+=[line]
     def getjj2code(self):
-        code=' '.join(self.jj2list)
+        if len(self.jj2code_cache)<1:return ''
+        code=''.join(line+'\n' for line in self.jj2code_cache)
         return code
-    def execjj2code(self,code):
+    def execjj2code_cache(self) -> str:
+        code=self.getjj2code()
+        if code==None or code.strip()=='': return code
         env = Environment()
-        return
+        template = Template(code)
+        ret=template.render(self.jj2code_args)
+        return ret
     def forcejj2code(self,line): 
-        istb=self._is_jj2_begin(line)
+        if not self.isjj2code:
+            istb=self._is_jj2_begin(line)
+            if istb: 
+                self.isjj2code=True
+                if len(line.strip())>15:
+                    argline =line.split(":",1)
+                    if len(argline)>1:
+                        argstr=argline[1]
+                        tplargs=self._filter_dict(argstr)
+                        self.jj2code_args.update(tplargs)
+                    iste=self._is_jj2_end(line)
+                    if iste:
+                        self.cleanjj2code_cache()
+                        self.isjj2code=False
+                        return ''
+                line= ''
         iste=self._is_jj2_end(line)
-        if istb:self.isjj2code=True
         if iste:
             self.isjj2code=False
-            jj2code=self.getjj2code()
-            line=self.execjj2code(jj2code)
+            line= ''
+            line=self.execjj2code_cache()
+            self.cleanjj2code_cache()
+            return line
         if self.isjj2code: self.addjj2codeline(line)
         line= "" if self.isjj2code else line+"\n"
         return line
@@ -285,7 +323,7 @@ class MyPythonKernel(Kernel):
             return None
         env_dict={}
         argsstr=self.replacemany(self.replacemany(self.replacemany(argsstr.strip(),('  '),' '),('= '),'='),' =','=')
-        envstr=str(str(argsstr.split(" ")).split("=")).replace(" ","").replace("\'","").replace("\"","").replace("[","").replace("]","").replace("\\","")
+        pattern = re.compile(r'([^\s*]*)="(.*?)"|([^\s*]*)=(\'.*?\')|([^\s*]*)=(.[^\s]*)')
         env_list=envstr.split(",")
         for i in range(0,len(env_list),2):
             env_dict[str(env_list[i])]=env_list[i+1]
