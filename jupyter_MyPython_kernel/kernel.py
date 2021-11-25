@@ -180,46 +180,15 @@ class MyPythonKernel(Kernel):
         self.chk_replexit_thread = Thread(target=self.chk_replexit, args=(self.g_rtsps))
         self.chk_replexit_thread.daemon = True
         self.chk_replexit_thread.start()
-    def __init__(self, *args, **kwargs):
-        super(MyPythonKernel, self).__init__(*args, **kwargs)
-        self._allow_stdin = True
-        self.readOnlyFileSystem = False
-        self.bufferedOutput = True
-        self.linkMaths = True # always link math library
-        self.wAll = True # show all warnings by default
-        self.wError = False # but keep comipiling for warnings
-        self.files = []
-        self.resDir = path.join(path.dirname(path.realpath(__file__)), 'resources')
-        self.chk_replexit_thread = Thread(target=self.chk_replexit, args=(self.g_rtsps))
-        self.chk_replexit_thread.daemon = True
-        self.chk_replexit_thread.start()
+    isjj2code=False
     def _is_jj2_begin(self,line):
         if line==None or line=='':return ''
         return line.strip().startswith('##jj2_begin') or line.strip().startswith('//jj2_begin')
     def _is_jj2_end(self,line):
         if line==None or line=='':return ''
         return line.strip().startswith('##jj2_end') or line.strip().startswith('//jj2_end')
-    def _is_test_begin(self,line):
-        if line==None or line=='':return ''
-        return line.strip().startswith('##test_begin') or line.strip().startswith('//test_begin')
-    def _is_test_end(self,line):
-        if line==None or line=='':return ''
-        return line.strip().startswith('##test_end') or line.strip().startswith('//test_end')
-    def _is_dqm_begin(self,line):
-        if line==None or line=='':return ''
-        return line.lstrip().startswith('\"\"\"')
-    def _is_dqm_end(self,line):
-        if line==None or line=='':return ''
-        return line.rstrip().endswith('\"\"\"')
-    def _is_sqm_begin(self,line):
-        if line==None or line=='':return ''
-        return line.lstrip().startswith('\'\'\'')
-    def _is_sqm_end(self,line):
-        if line==None or line=='':return ''
-        return line.rstrip().endswith('\'\'\'')
     jj2code_cache=[]
     jj2code_args={}
-    isjj2code=False
     def cleanjj2code_cache(self,):
         self.jj2code_cache.clear()
         self.jj2code_args={}
@@ -263,6 +232,38 @@ class MyPythonKernel(Kernel):
         if self.isjj2code: self.addjj2codeline(line)
         line= "" if self.isjj2code else line+"\n"
         return line
+    def readtemplatefile(self,filename,spacecount=0,*args: t.Any, **kwargs: t.Any):
+        filecode=''
+        newfilecode=''
+        codelist1=None
+        filenm=os.path.join(os.path.abspath(''),filename);
+        if not os.path.exists(filenm):
+            return filecode;
+        template = self.jinja2_env.get_template(filenm)
+        filecode=template.render(*args,**kwargs)
+        for line in filecode.splitlines():
+            if len(line)>0:
+                for t in line:
+                    newfilecode+=' '*spacecount + t+'\n'
+        return newfilecode
+    def _is_test_begin(self,line):
+        if line==None or line=='':return ''
+        return line.strip().startswith('##test_begin') or line.strip().startswith('//test_begin')
+    def _is_test_end(self,line):
+        if line==None or line=='':return ''
+        return line.strip().startswith('##test_end') or line.strip().startswith('//test_end')
+    def _is_dqm_begin(self,line):
+        if line==None or line=='':return ''
+        return line.lstrip().startswith('\"\"\"')
+    def _is_dqm_end(self,line):
+        if line==None or line=='':return ''
+        return line.rstrip().endswith('\"\"\"')
+    def _is_sqm_begin(self,line):
+        if line==None or line=='':return ''
+        return line.lstrip().startswith('\'\'\'')
+    def _is_sqm_end(self,line):
+        if line==None or line=='':return ''
+        return line.rstrip().endswith('\'\'\'')
     def cleannotes(self,line):
         return '' if (not self._is_specialID(line)) and (line.lstrip().startswith('#') or line.lstrip().startswith('//')) else line
     isdqm=False
@@ -324,9 +325,10 @@ class MyPythonKernel(Kernel):
         env_dict={}
         argsstr=self.replacemany(self.replacemany(self.replacemany(argsstr.strip(),('  '),' '),('= '),'='),' =','=')
         pattern = re.compile(r'([^\s*]*)="(.*?)"|([^\s*]*)=(\'.*?\')|([^\s*]*)=(.[^\s]*)')
-        env_list=envstr.split(",")
-        for i in range(0,len(env_list),2):
-            env_dict[str(env_list[i])]=env_list[i+1]
+        for argument in pattern.findall(argsstr):
+            li=list(argument)
+            li= [i for i in li if i != '']
+            env_dict[str(li[0])]=li[1]
         return env_dict
     def _is_specialID(self,line):
         if line.strip().startswith('##%') or line.strip().startswith('//%'):
@@ -564,14 +566,15 @@ class MyPythonKernel(Kernel):
     def _filter_env(self, envstr):
         if envstr is None or len(envstr.strip())<1:
             return os.environ
-        envstr=str(str(envstr.split("|")).split("=")).replace(" ","").replace("\'","").replace("\"","").replace("[","").replace("]","").replace("\\","")
-        env_list=envstr.split(",")
-        for i in range(0,len(env_list),2):
-            os.environ.setdefault(env_list[i],env_list[i+1])
+        argsstr=self.replacemany(self.replacemany(self.replacemany(envstr.strip(),('  '),' '),('= '),'='),' =','=')
+        pattern = re.compile(r'([^\s*]*)="(.*?)"|([^\s*]*)=(\'.*?\')|([^\s*]*)=(.[^\s]*)')
+        for argument in pattern.findall(argsstr):
+            li=list(argument)
+            li= [i for i in li if i != '']
+            os.environ.setdefault(str(li[0]),li[1])
         return os.environ
     def _filter_magics(self, code):
-        magics = {'cflags': [],
-                  'ldflags': [],
+        magics = {
                   'file': [],
                   'overwritefile': [],
                   'include': [],
@@ -585,7 +588,6 @@ class MyPythonKernel(Kernel):
                   'norunnotecmd': [],
                   'noruncode': [],
                   'command': [],
-                  'fluttercmd': [],
                   'pythoncmd': [],
                   'outputtype':'text/plain',
                   'env':None,
@@ -622,15 +624,15 @@ class MyPythonKernel(Kernel):
                 elif line.strip()[3:] == "onlyrunnotecmd":
                     magics['onlyrunnotecmd'] += ['true']
                     continue
+                elif line.strip()[3:] == "onlyruncmd":
+                    magics['onlyruncmd'] += ['true']
+                    continue
                 findObj= re.search( r':(.*)',line)
                 if not findObj or len(findObj.group(0))<2:
                     continue
                 key, value = line.strip()[3:].split(":", 2)
                 key = key.strip().lower()
-                if key in ['ldflags', 'cflags']:
-                    for flag in value.split():
-                        magics[key] += [flag]
-                elif key == "runmode":
+                if key == "runmode":
                     if len(value)>0:
                         magics[key] = value[re.search(r'[^/]',value).start():]
                     else:
@@ -687,11 +689,6 @@ class MyPythonKernel(Kernel):
                         magics[key] += [flag]
                     if len(magics['pythoncmd'])>0:
                         self.do_Py_command(magics['pythoncmd'],magics=magics)
-                elif key == "fluttercmd":
-                    for flag in value.split():
-                        magics[key] += [flag]
-                    if len(magics['fluttercmd'])>0:
-                        self.do_flutter_command(magics['fluttercmd'],magics=magics)
                 elif key == "env":
                     envdict=self._filter_env(value)
                     magics[key] =dict(envdict)

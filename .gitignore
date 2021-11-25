@@ -8,3 +8,8 @@ MANIFEST
 *.egg-info/
 venv/
 .vscode/
+test/
+test*
+*.bak
+*.old
+*old.*
