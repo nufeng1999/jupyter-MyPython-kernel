@@ -4,6 +4,7 @@ from threading import Thread
 from ipykernel.kernelbase import Kernel
 from pexpect import replwrap, EOF
 from jinja2 import Environment, PackageLoader, select_autoescape,Template
+from abc import ABCMeta, abstractmethod
 import pexpect
 import signal
 import typing 
@@ -579,6 +580,7 @@ class MyPythonKernel(Kernel):
                   'overwritefile': [],
                   'include': [],
                   'templatefile': [],
+                  'test': [],
                   'repllistpid': [],
                   'replcmdmode': [],
                   'replprompt': [],
@@ -604,6 +606,9 @@ class MyPythonKernel(Kernel):
             if self._is_specialID(line):
                 if line.strip()[3:] == "noruncode":
                     magics['noruncode'] += ['true']
+                    continue
+                elif line.strip()[3:] == "test":
+                    magics['test'] += ['true']
                     continue
                 elif line.strip()[3:] == "overwritefile":
                     magics['overwritefile'] += ['true']
@@ -700,10 +705,11 @@ class MyPythonKernel(Kernel):
             else:
                 actualCode += line + '\n'
         newactualCode=actualCode
-        if len(magics['file'])>0 and len(magics['noruncode'])>0:
+        if len(magics['file'])>0 :
             newactualCode=''
             for line in actualCode.splitlines():
-                line=self.cleantestcode(line)
+                if len(magics['test'])<1:
+                    line=self.cleantestcode(line)
                 if line=='':continue
                 line=self.cleandqm(line)
                 if line=='':continue
