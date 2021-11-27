@@ -269,7 +269,7 @@ class MyPythonKernel(Kernel):
         if line==None or line=='':return ''
         return line.rstrip().endswith('\'\'\'')
     def cleannotes(self,line):
-        return '' if (not self._is_specialID(line)) and (line.lstrip().startswith('#') or line.lstrip().startswith('//')) else line
+        return '' if (not self._is_specialID(line)) and (line.lstrip().startswith('##') or line.lstrip().startswith('//')) else line
     isdqm=False
     def cleandqm(self,line):
         if not self.isdqm:
