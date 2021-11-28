@@ -1,3 +1,6 @@
+#
+#   MyPython Jupyter Kernel
+#
 from math import exp
 from queue import Queue
 from threading import Thread
@@ -7,7 +10,7 @@ from jinja2 import Environment, PackageLoader, select_autoescape,Template
 from abc import ABCMeta, abstractmethod
 from typing import List, Dict, Tuple, Sequence
 from shutil import copyfile
-from .ISpecialID import IStag,IDtag,IBtag,ITag
+from plugins.ISpecialID import IStag,IDtag,IBtag,ITag
 import pexpect
 import signal
 import typing 
@@ -184,6 +187,7 @@ class MyPythonKernel(Kernel):
         self.chk_replexit_thread = Thread(target=self.chk_replexit, args=(self.g_rtsps))
         self.chk_replexit_thread.daemon = True
         self.chk_replexit_thread.start()
+        self.init_plugin()
     isjj2code=False
     def _is_jj2_begin(self,line):
         if line==None or line=='':return ''
@@ -318,6 +322,7 @@ class MyPythonKernel(Kernel):
             return ''
         line= "" if self.istestcode else line
         return line
+#kernel_common
     usleep = lambda x: time.sleep(x/1000000.0)
     def replacemany(self,our_str, to_be_replaced:str, replace_with:str):
         while (to_be_replaced in our_str):
@@ -337,21 +342,24 @@ class MyPythonKernel(Kernel):
     def _fileshander(self,files:List,srcfilename,magics)->str:
         index=-1
         fristfile=srcfilename
-        for newsrcfilename in files:
-            index=index+1
-            newsrcfilename = os.path.join(os.path.abspath(''),newsrcfilename)
-            if os.path.exists(newsrcfilename):
-                if magics!=None and len(magics['overwritefile'])<1:
-                    newsrcfilename +=".new.py"
-            if not os.path.exists(os.path.dirname(newsrcfilename)) :
-                os.makedirs(os.path.dirname(newsrcfilename))
-            if index==0:
-                os.rename(srcfilename,newsrcfilename)
-                fristfile=newsrcfilename
-                files[0]=newsrcfilename
-            else:
-                self._write_to_stdout("copy to :"+newsrcfilename+"\n")
-                copyfile(fristfile,newsrcfilename)
+        try:
+            for newsrcfilename in files:
+                index=index+1
+                newsrcfilename = os.path.join(os.path.abspath(''),newsrcfilename)
+                if os.path.exists(newsrcfilename):
+                    if magics!=None and len(magics['overwritefile'])<1:
+                        newsrcfilename +=".new.py"
+                if not os.path.exists(os.path.dirname(newsrcfilename)) :
+                    os.makedirs(os.path.dirname(newsrcfilename))
+                if index==0:
+                    os.rename(srcfilename,newsrcfilename)
+                    fristfile=newsrcfilename
+                    files[0]=newsrcfilename
+                else:
+                    self._write_to_stdout("copy to :"+newsrcfilename+"\n")
+                    copyfile(fristfile,newsrcfilename)
+        except Exception as e:
+                self._log(str(e),2)
         return files[0]
     def _is_specialID(self,line):
         if line.strip().startswith('##%') or line.strip().startswith('//%'):
@@ -364,14 +372,16 @@ class MyPythonKernel(Kernel):
                 self._write_to_stdout(key+"\n")
         else:
             self._write_to_stdout("--------All replpid--------\nNone\n")
-    def chk_replexit(grtsps): 
-        while MyPythonKernel.g_chkreplexit:
+    def chk_replexit(self,grtsps): 
+        while self.g_chkreplexit:
             try:
                 if len(grtsps)>0: 
                     for key in grtsps:
                         if grtsps[key].child.terminated:
                             pass
                             del grtsps[key]
+                        # else:
+                        #     grtsps[key].write_contents()
             finally:
                 pass
         if len(grtsps)>0: 
@@ -596,6 +606,7 @@ class MyPythonKernel(Kernel):
             li= [i for i in li if i != '']
             os.environ.setdefault(str(li[0]),li[1])
         return os.environ
+#Python _filter_magics
     def _filter_magics(self, code):
         magics = {
                   'file': [],
@@ -724,10 +735,15 @@ class MyPythonKernel(Kernel):
                 elif key == "outputtype":
                     magics[key]=value
                 elif key == "args":
+                    # Split arguments respecting quotes
                     for argument in re.findall(r'(?:[^\s,"]|"(?:\\.|[^"])*")+', value):
                         magics['args'] += [argument.strip('"')]
                 else:
+                    #self.callISplugin(key,line)
                     pass
+                # always add empty line, so line numbers don't change
+                # actualCode += '\n'
+            # keep lines which did not contain magics
             else:
                 actualCode += line + '\n'
         newactualCode=actualCode
@@ -737,6 +753,7 @@ class MyPythonKernel(Kernel):
                 if len(magics['test'])<1:
                     line=self.cleantestcode(line)
                 if line=='':continue
+                line=self.callIDplugin(line)
                 if line=='':continue
                 line=self.cleandqm(line)
                 if line=='':continue
@@ -764,25 +781,39 @@ class MyPythonKernel(Kernel):
                     user_expressions=None, allow_stdin=False)
             if len(magics['noruncode'])>0 and ( len(magics['command'])>0 or len(magics['pythoncmd'])>0):
                 return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
+            # if len(magics['file'])<1:
+            #     magics, code = self._add_main(magics, code)
             with self.new_temp_file(suffix='.py',dir=os.path.abspath('')) as source_file:
                 source_file.write(code)
                 source_file.flush()
                 newsrcfilename=source_file.name
                 if len(magics['file'])>0:
                     newsrcfilename = self._fileshander(magics['file'],newsrcfilename,magics)
+                    # newsrcfilename = magics['file'][0]
+                    # newsrcfilename = os.path.join(os.path.abspath(''),newsrcfilename)
+                    # if os.path.exists(newsrcfilename):
+                    #     if len(magics['overwritefile'])<1:
+                    #         newsrcfilename +=".new.py"
+                    # if not os.path.exists(os.path.dirname(newsrcfilename)) :
+                    #     os.makedirs(os.path.dirname(newsrcfilename))
+                    # os.rename(source_file.name,newsrcfilename)
                     self._write_to_stdout("[MyPythonkernel] Info:file "+ newsrcfilename +" created successfully\n")
             if len(magics['noruncode'])>0:
                 return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
             self._write_to_stdout("The process :"+newsrcfilename+"\n")
             p = self.create_jupyter_subprocess(['python',newsrcfilename]+ magics['args'],cwd=None,shell=False,env=magics['env'])
+            #p = self.create_jupyter_subprocess([binary_file.name]+ magics['args'],cwd=None,shell=False)
+            #p = self.create_jupyter_subprocess([self.master_path, binary_file.name] + magics['args'],cwd='/tmp',shell=True)
             self.g_rtsps[str(p.pid)]=p
             if len(magics['showpid'])>0:
                 self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
             while p.poll() is None:
                 p.write_contents(magics)
             self._write_to_stdout("The process end:"+str(p.pid)+"\n")
+            # wait for threads to finish, so output is always shown
             p._stdout_thread.join()
             p._stderr_thread.join()
+            # del self.g_rtsps[str(p.pid)]
             p.write_contents(magics)
             self.cleanup_files()
             if p.returncode != 0:
@@ -827,6 +858,7 @@ class MyPythonKernel(Kernel):
     def pluginRegister(self,obj):
         if obj==None:return
         try:
+            obj.setKernelobj(obj,self)
             priority=obj.getPriority(obj)
             if not inspect.isabstract(obj) and issubclass(obj,IStag):
                 self.ISplugins[str(priority)]+=[obj]
@@ -839,18 +871,22 @@ class MyPythonKernel(Kernel):
         pass
     def pluginISList(self):
         for key,value in self.ISplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 print(obj.getName(obj)+"\n")
     def pluginIDList(self):
         for key,value in self.IDplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 print(obj.getName(obj)+"\n")
     def pluginIBList(self):
         for key,value in self.IBplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 print(obj.getName(obj)+"\n")
     def onkernelshutdown(self,restart):
         for key,value in self.IDplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_shutdown(obj,restart)
@@ -862,6 +898,7 @@ class MyPythonKernel(Kernel):
         dywtoend=False ##是否要结束整个代码执行过程
         newcode=code
         for key,value in self.ISplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_before_compile(obj,code)
@@ -873,6 +910,7 @@ class MyPythonKernel(Kernel):
     def callISp_after_compile(self,returncode,binfile):
         dywtoend=False ##是否要结束整个代码执行过程
         for key,value in self.ISplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_after_compile(obj,returncode,binfile)
@@ -885,6 +923,7 @@ class MyPythonKernel(Kernel):
         dywtoend=False ##是否要结束整个代码执行过程
         newcode=code
         for key,value in self.IBplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_before_compile(obj,code)
@@ -896,6 +935,7 @@ class MyPythonKernel(Kernel):
     def callIBp_after_compile(self,returncode,binfile):
         dywtoend=False ##是否要结束整个代码执行过程
         for key,value in self.IBplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_after_compile(obj,returncode,binfile)
@@ -908,6 +948,7 @@ class MyPythonKernel(Kernel):
         dywtoend=False ##是否要结束整个代码执行过程
         newcode=code
         for key,value in self.ISplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_before_exec(obj,code)
@@ -919,6 +960,7 @@ class MyPythonKernel(Kernel):
     def callISp_after_exec(self,returncode,execfile):
         dywtoend=False ##是否要结束整个代码执行过程
         for key,value in self.ISplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_after_exec(obj,returncode,execfile)
@@ -931,6 +973,7 @@ class MyPythonKernel(Kernel):
         dywtoend=False ##是否要结束整个代码执行过程
         newcode=code
         for key,value in self.IBplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_before_exec(obj,code)
@@ -942,6 +985,7 @@ class MyPythonKernel(Kernel):
     def callIBp_after_exec(self,returncode,execfile):
         dywtoend=False ##是否要结束整个代码执行过程
         for key,value in self.IBplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_after_exec(obj,returncode,execfile)
@@ -953,6 +997,7 @@ class MyPythonKernel(Kernel):
     def callIBplugin(self,key,line):
         newline=line
         for key,value in self.IBplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_IBpCodescanning(obj,key,newline)
@@ -963,6 +1008,7 @@ class MyPythonKernel(Kernel):
     def callISplugin(self,key,line):
         newline=line
         for key,value in self.IDplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_ISpCodescanning(obj,key,newline)
@@ -973,6 +1019,7 @@ class MyPythonKernel(Kernel):
     def callIDplugin(self,line):
         newline=line
         for key,value in self.IDplugins.items():
+            # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
                     newline=obj.on_IDpReorgCode(obj,newline)
@@ -982,23 +1029,25 @@ class MyPythonKernel(Kernel):
                 finally:pass
         return newline
     def init_plugin(self):
-        mypath = os.getcwd()
-        idir=os.path.join(mypath,'src/')
+        mypath = os.path.dirname(os.path.abspath(__file__))
+        # idir=os.path.join(mypath,'src/')
         sys.path.append(mypath)
-        sys.path.append(idir)
-        for f in os.listdir(idir):
-            if os.path.isfile(os.path.join(idir,f)):
+        # sys.path.append(idir)
+        for f in os.listdir(mypath):
+            if os.path.isfile(os.path.join(mypath,f)):
                 try:
                     name=os.path.splitext(f)[0]
-                    if name!='pluginmng' and (spec := importlib.util.find_spec(name,package='src')) is not None:
-                        module = importlib.import_module(name,package='src')
+                    if name!='pluginmng' and name!='kernel' and(spec := importlib.util.find_spec(name)) is not None:
+                        module = importlib.import_module(name)
                         for name1, obj in inspect.getmembers(module,
                             lambda obj: 
                                 callable(obj) 
                                 and inspect.isclass(obj) 
                                 and not inspect.isabstract(obj) 
-                                and issubclass(obj,ITag)):
-                                self.pluginRegister(obj)
+                                and issubclass(obj,ITag)
+                                ):
+                            # self._write_to_stdout("\n"+obj.__name__+"\n")
+                            self.pluginRegister(obj)
                     else:
                         pass
                 except Exception as e:
