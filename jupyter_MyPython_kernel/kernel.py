@@ -39,14 +39,11 @@ class IREPLWrapper(replwrap.REPLWrapper):
         self.replsetip=replsetip
         self.startflag=True
         self.startexpecttimeout=60
-        # x = time.localtime(time.time())
         self.start_time = time.time()
         replwrap.REPLWrapper.__init__(self, cmd_or_spawn, orig_prompt,
                                       prompt_change,extra_init_cmd=extra_init_cmd)
     def _expect_prompt(self, timeout=-1):
         if timeout == -1 or timeout ==None :
-            # "None" means we are executing code from a Jupyter cell by way of the run_command
-            # in the do_execute() code below, so do incremental output.
             retry=0
             received=False
             cmdstart_time = time.time()
@@ -63,7 +60,6 @@ class IREPLWrapper(replwrap.REPLWrapper):
                 try:
                     pos = self.child.expect_exact([u'\r\n', self.continuation_prompt, self.replsetip, pexpect.EOF, pexpect.TIMEOUT],timeout=cmdexectimeout)
                     if pos == 2:
-                        # End of line received
                         if self.child.terminated:
                             self.line_output_callback("\nprocess.terminated\n")
                         self.line_output_callback(self.child.before +self.replsetip+ '\r\n')
@@ -82,7 +78,6 @@ class IREPLWrapper(replwrap.REPLWrapper):
                         cmdstart_time = time.time()
                     else:
                         if len(self.child.before) != 0:
-                            # prompt received, but partial line precedes it
                             self.line_output_callback(self.child.before)
                             cmdstart_time = time.time()
                         else:
@@ -92,12 +87,9 @@ class IREPLWrapper(replwrap.REPLWrapper):
                             if run_time > 10:
                                 break
                 except Exception as e:
-                    # self.line_output_callback(self.child.before)
                     self._write_to_stderr("[MyPythonkernel] Error:Executable _expect_prompt error! "+str(e)+"\n")
         else:
-            # Otherwise, use existing non-incremental code
             pos = replwrap.REPLWrapper._expect_prompt(self, timeout=timeout)
-        # Prompt received, so return normally
         return pos
 class RealTimeSubprocess(subprocess.Popen):
     inputRequest = "<inputRequest>"
@@ -134,8 +126,6 @@ class RealTimeSubprocess(subprocess.Popen):
         stdout_contents = read_all_from_queue(self._stdout_queue)
         if stdout_contents:
             contents = stdout_contents.decode()
-            # if there is input request, make output and then
-            # ask frontend for input
             start = contents.find(self.__class__.inputRequest)
             if(start >= 0):
                 contents = contents.replace(self.__class__.inputRequest, '')
@@ -144,7 +134,6 @@ class RealTimeSubprocess(subprocess.Popen):
                 readLine = ""
                 while(len(readLine) == 0):
                     readLine = self._read_from_stdin()
-                # need to add newline since it is not captured by frontend
                 readLine += "\n"
                 self.stdin.write(readLine.encode())
             else:
@@ -454,10 +443,6 @@ class MyPythonKernel(Kernel):
                 filecode+=' '*spacecount + t
         return filecode
     def _start_replprg(self,command,args,magics):
-        # Signal handlers are inherited by forked processes, and we can't easily
-        # reset it from the subprocess. Since kernelapp ignores SIGINT except in
-        # message handlers, we need to temporarily reset the SIGINT handler here
-        # so that bash and its children are interruptible.
         sig = signal.signal(signal.SIGINT, signal.SIG_DFL)
         self.silent = None
         try:
@@ -475,7 +460,6 @@ class MyPythonKernel(Kernel):
                                     prompt_change=None,
                                     extra_init_cmd=None,
                                     line_output_callback=self.process_output)
-            # self._write_to_stdout("replchild pid:"+str(self.replwrapper.child.pid)+"\n")
             self.g_rtsps[str(self.replwrapper.child.pid)]=self.replwrapper
         except Exception as e:
             self._write_to_stderr("[MyPythonkernel] Error:Executable _start_replprg error! "+str(e)+"\n")
@@ -496,10 +480,6 @@ class MyPythonKernel(Kernel):
                     'payload': [], 'user_expressions': {}}
         interrupted = False
         try:
-            # Note: timeout=None tells IREPLWrapper to do incremental
-            # output.  Also note that the return value from
-            # run_command is not needed, because the output was
-            # already sent by IREPLWrapper.
             self._write_to_stdout("send replcmd:"+code.rstrip()+"\n")
             self._write_to_stdout("---Received information after send repl cmd---\n")
             if magics and len(magics['replchildpid'])>0 :
@@ -520,16 +500,9 @@ class MyPythonKernel(Kernel):
             output = self.gdbwrapper.child.before
             self.process_output(output)
         except EOF:
-            # output = self.gdbwrapper.child.before + 'Restarting GDB'
-            # self._start_gdb()
-            # self.process_output(output)
             pass
         if interrupted:
             return {'status': 'abort', 'execution_count': self.execution_count}
-        # try:
-        #     exitcode = int(self.replwrapper.run_command('echo $?').rstrip())
-        # except Exception as e:
-        #     self.process_output("[MyPythonkernel] Error:Executable send_replcmd error! "+str(e)+"\n")
         exitcode = 0
         if exitcode:
             error_content = {'execution_count': self.execution_count,
@@ -541,7 +514,6 @@ class MyPythonKernel(Kernel):
             return {'status': 'ok', 'execution_count': self.execution_count,
                     'payload': [], 'user_expressions': {}}
     def do_shell_command(self,commands,cwd=None,shell=True,env=True,magics=None):
-        # self._write_to_stdout(''.join((' '+ str(s) for s in commands)))
         try:
             if len(magics['replcmdmode'])>0:
                 findObj= commands[0].split(" ",1)
@@ -564,7 +536,6 @@ class MyPythonKernel(Kernel):
                 self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
             while p.poll() is None:
                 p.write_contents()
-            # wait for threads to finish, so output is always shown
             p._stdout_thread.join()
             p._stderr_thread.join()
             del self.g_rtsps[str(p.pid)]
@@ -583,7 +554,6 @@ class MyPythonKernel(Kernel):
             self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
         while p.poll() is None:
             p.write_contents()
-        # wait for threads to finish, so output is always shown
         p._stdout_thread.join()
         p._stderr_thread.join()
         del self.g_rtsps[str(p.pid)]
@@ -600,7 +570,6 @@ class MyPythonKernel(Kernel):
             self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
         while p.poll() is None:
             p.write_contents()
-        # wait for threads to finish, so output is always shown
         p._stdout_thread.join()
         p._stderr_thread.join()
         del self.g_rtsps[str(p.pid)]
@@ -642,7 +611,7 @@ class MyPythonKernel(Kernel):
         magics = {
                   'file': [],
                   'overwritefile': [],
-                #   'include': [],
+                  'include': [],
                   'templatefile': [],
                   'test': [],
                   'repllistpid': [],
@@ -713,16 +682,16 @@ class MyPythonKernel(Kernel):
                         magics[key] += [value[re.search(r'[^/]',value).start():]]
                     else:
                         magics[key] +=['newfile']
-                # elif key == "include":
-                #     if len(value)>0:
-                #         magics[key] = value
-                #     else:
-                #         magics[key] =''
-                #         continue
-                #     if len(magics['include'])>0:
-                #         index1=line.find('##%')
-                #         line=self.readcodefile(magics['include'],index1)
-                #         actualCode += line + '\n'
+                elif key == "include":
+                    if len(value)>0:
+                        magics[key] = value
+                    else:
+                        magics[key] =''
+                        continue
+                    if len(magics['include'])>0:
+                        index1=line.find('##%')
+                        line=self.readcodefile(magics['include'],index1)
+                        actualCode += line + '\n'
                 elif key == "templatefile":
                     index1=line.find('//%')
                     if len(value)>0:
@@ -770,20 +739,8 @@ class MyPythonKernel(Kernel):
                     for argument in re.findall(r'(?:[^\s,"]|"(?:\\.|[^"])*")+', value):
                         magics['args'] += [argument.strip('"')]
                 else:
-                    # line=self.callISplugin(key,value,magics)
-                    for pkey,pvalue in self.ISplugins.items():
-                        # print( pkey +":"+str(len(pvalue))+"\n")
-                        for pobj in pvalue:
-                            newline=''
-                            try:
-                                if key==pobj.getIDSptag(pobj):
-                                    newline=pobj.on_ISpCodescanning(pobj,key,value,magics,line)
-                                    if newline=='':break
-                            except Exception as e:
-                                pass
-                            finally:pass
-                            if newline!=None and newline!='':
-                                actualCode += newline + '\n'
+                    #self.callISplugin(key,line)
+                    pass
                 # always add empty line, so line numbers don't change
                 # actualCode += '\n'
             # keep lines which did not contain magics
@@ -1048,18 +1005,17 @@ class MyPythonKernel(Kernel):
                 except Exception as e:
                     pass
                 finally:pass
-    def callISplugin(self,key,value,magics):
-        newline=value
+    def callISplugin(self,key,line):
+        newline=line
         for key,value in self.IDplugins.items():
             # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
-                    newline=obj.on_ISpCodescanning(obj,key,value,magics)
+                    newline=obj.on_ISpCodescanning(obj,key,newline)
                     if newline=='':break
                 except Exception as e:
                     pass
                 finally:pass
-        return ''
     def callIDplugin(self,line):
         newline=line
         for key,value in self.IDplugins.items():
