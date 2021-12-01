@@ -28,6 +28,7 @@ import time
 import importlib
 import importlib.util
 import inspect
+from plugins._filter2_magics import Magics
 class IREPLWrapper(replwrap.REPLWrapper):
     def __init__(self, write_to_stdout, write_to_stderr, read_from_stdin,
                 cmd_or_spawn,replsetip, orig_prompt, prompt_change,
@@ -39,11 +40,14 @@ class IREPLWrapper(replwrap.REPLWrapper):
         self.replsetip=replsetip
         self.startflag=True
         self.startexpecttimeout=60
+        # x = time.localtime(time.time())
         self.start_time = time.time()
         replwrap.REPLWrapper.__init__(self, cmd_or_spawn, orig_prompt,
                                       prompt_change,extra_init_cmd=extra_init_cmd)
     def _expect_prompt(self, timeout=-1):
         if timeout == -1 or timeout ==None :
+            # "None" means we are executing code from a Jupyter cell by way of the run_command
+            # in the do_execute() code below, so do incremental output.
             retry=0
             received=False
             cmdstart_time = time.time()
@@ -60,6 +64,7 @@ class IREPLWrapper(replwrap.REPLWrapper):
                 try:
                     pos = self.child.expect_exact([u'\r\n', self.continuation_prompt, self.replsetip, pexpect.EOF, pexpect.TIMEOUT],timeout=cmdexectimeout)
                     if pos == 2:
+                        # End of line received
                         if self.child.terminated:
                             self.line_output_callback("\nprocess.terminated\n")
                         self.line_output_callback(self.child.before +self.replsetip+ '\r\n')
@@ -78,6 +83,7 @@ class IREPLWrapper(replwrap.REPLWrapper):
                         cmdstart_time = time.time()
                     else:
                         if len(self.child.before) != 0:
+                            # prompt received, but partial line precedes it
                             self.line_output_callback(self.child.before)
                             cmdstart_time = time.time()
                         else:
@@ -87,9 +93,12 @@ class IREPLWrapper(replwrap.REPLWrapper):
                             if run_time > 10:
                                 break
                 except Exception as e:
+                    # self.line_output_callback(self.child.before)
                     self._write_to_stderr("[MyPythonkernel] Error:Executable _expect_prompt error! "+str(e)+"\n")
         else:
+            # Otherwise, use existing non-incremental code
             pos = replwrap.REPLWrapper._expect_prompt(self, timeout=timeout)
+        # Prompt received, so return normally
         return pos
 class RealTimeSubprocess(subprocess.Popen):
     inputRequest = "<inputRequest>"
@@ -97,6 +106,7 @@ class RealTimeSubprocess(subprocess.Popen):
         self._write_to_stdout = write_to_stdout
         self._write_to_stderr = write_to_stderr
         self._read_from_stdin = read_from_stdin
+        if env!=None and len(env)<1:env=None
         super().__init__(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE,
                             bufsize=0,cwd=cwd,shell=shell,env=env)
         self._stdout_queue = Queue()
@@ -126,6 +136,8 @@ class RealTimeSubprocess(subprocess.Popen):
         stdout_contents = read_all_from_queue(self._stdout_queue)
         if stdout_contents:
             contents = stdout_contents.decode()
+            # if there is input request, make output and then
+            # ask frontend for input
             start = contents.find(self.__class__.inputRequest)
             if(start >= 0):
                 contents = contents.replace(self.__class__.inputRequest, '')
@@ -134,6 +146,7 @@ class RealTimeSubprocess(subprocess.Popen):
                 readLine = ""
                 while(len(readLine) == 0):
                     readLine = self._read_from_stdin()
+                # need to add newline since it is not captured by frontend
                 readLine += "\n"
                 self.stdin.write(readLine.encode())
             else:
@@ -188,6 +201,7 @@ class MyPythonKernel(Kernel):
         self.chk_replexit_thread.daemon = True
         self.chk_replexit_thread.start()
         self.init_plugin()
+        self.mag=Magics(self,self.plugins)
     isjj2code=False
     def _is_jj2_begin(self,line):
         if line==None or line=='':return ''
@@ -322,8 +336,12 @@ class MyPythonKernel(Kernel):
             return ''
         line= "" if self.istestcode else line
         return line
-#kernel_common
     usleep = lambda x: time.sleep(x/1000000.0)
+    def addkey2dict(self,magics:Dict,key:str):
+        if not magics.__contains__(key):
+            d={key:[]}
+            magics.update(d)
+        return magics[key]
     def replacemany(self,our_str, to_be_replaced:str, replace_with:str):
         while (to_be_replaced in our_str):
             our_str = our_str.replace(to_be_replaced, replace_with)
@@ -347,7 +365,7 @@ class MyPythonKernel(Kernel):
                 index=index+1
                 newsrcfilename = os.path.join(os.path.abspath(''),newsrcfilename)
                 if os.path.exists(newsrcfilename):
-                    if magics!=None and len(magics['overwritefile'])<1:
+                    if magics!=None and len(self.addkey2dict(magics,'overwritefile'))<1:
                         newsrcfilename +=".new.py"
                 if not os.path.exists(os.path.dirname(newsrcfilename)) :
                     os.makedirs(os.path.dirname(newsrcfilename))
@@ -443,6 +461,10 @@ class MyPythonKernel(Kernel):
                 filecode+=' '*spacecount + t
         return filecode
     def _start_replprg(self,command,args,magics):
+        # Signal handlers are inherited by forked processes, and we can't easily
+        # reset it from the subprocess. Since kernelapp ignores SIGINT except in
+        # message handlers, we need to temporarily reset the SIGINT handler here
+        # so that bash and its children are interruptible.
         sig = signal.signal(signal.SIGINT, signal.SIG_DFL)
         self.silent = None
         try:
@@ -460,6 +482,7 @@ class MyPythonKernel(Kernel):
                                     prompt_change=None,
                                     extra_init_cmd=None,
                                     line_output_callback=self.process_output)
+            # self._write_to_stdout("replchild pid:"+str(self.replwrapper.child.pid)+"\n")
             self.g_rtsps[str(self.replwrapper.child.pid)]=self.replwrapper
         except Exception as e:
             self._write_to_stderr("[MyPythonkernel] Error:Executable _start_replprg error! "+str(e)+"\n")
@@ -480,6 +503,10 @@ class MyPythonKernel(Kernel):
                     'payload': [], 'user_expressions': {}}
         interrupted = False
         try:
+            # Note: timeout=None tells IREPLWrapper to do incremental
+            # output.  Also note that the return value from
+            # run_command is not needed, because the output was
+            # already sent by IREPLWrapper.
             self._write_to_stdout("send replcmd:"+code.rstrip()+"\n")
             self._write_to_stdout("---Received information after send repl cmd---\n")
             if magics and len(magics['replchildpid'])>0 :
@@ -500,9 +527,16 @@ class MyPythonKernel(Kernel):
             output = self.gdbwrapper.child.before
             self.process_output(output)
         except EOF:
+            # output = self.gdbwrapper.child.before + 'Restarting GDB'
+            # self._start_gdb()
+            # self.process_output(output)
             pass
         if interrupted:
             return {'status': 'abort', 'execution_count': self.execution_count}
+        # try:
+        #     exitcode = int(self.replwrapper.run_command('echo $?').rstrip())
+        # except Exception as e:
+        #     self.process_output("[MyPythonkernel] Error:Executable send_replcmd error! "+str(e)+"\n")
         exitcode = 0
         if exitcode:
             error_content = {'execution_count': self.execution_count,
@@ -514,6 +548,7 @@ class MyPythonKernel(Kernel):
             return {'status': 'ok', 'execution_count': self.execution_count,
                     'payload': [], 'user_expressions': {}}
     def do_shell_command(self,commands,cwd=None,shell=True,env=True,magics=None):
+        # self._write_to_stdout(''.join((' '+ str(s) for s in commands)))
         try:
             if len(magics['replcmdmode'])>0:
                 findObj= commands[0].split(" ",1)
@@ -536,6 +571,7 @@ class MyPythonKernel(Kernel):
                 self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
             while p.poll() is None:
                 p.write_contents()
+            # wait for threads to finish, so output is always shown
             p._stdout_thread.join()
             p._stderr_thread.join()
             del self.g_rtsps[str(p.pid)]
@@ -554,6 +590,7 @@ class MyPythonKernel(Kernel):
             self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
         while p.poll() is None:
             p.write_contents()
+        # wait for threads to finish, so output is always shown
         p._stdout_thread.join()
         p._stderr_thread.join()
         del self.g_rtsps[str(p.pid)]
@@ -570,6 +607,7 @@ class MyPythonKernel(Kernel):
             self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
         while p.poll() is None:
             p.write_contents()
+        # wait for threads to finish, so output is always shown
         p._stdout_thread.join()
         p._stderr_thread.join()
         del self.g_rtsps[str(p.pid)]
@@ -606,163 +644,6 @@ class MyPythonKernel(Kernel):
             li= [i for i in li if i != '']
             os.environ.setdefault(str(li[0]),li[1])
         return os.environ
-#Python _filter_magics
-    def _filter_magics(self, code):
-        magics = {
-                  'file': [],
-                  'overwritefile': [],
-                  'include': [],
-                  'templatefile': [],
-                  'test': [],
-                  'repllistpid': [],
-                  'replcmdmode': [],
-                  'replprompt': [],
-                  'replsetip': "\r\n",
-                  'replchildpid':"0",
-                  'showpid': [],
-                  'norunnotecmd': [],
-                  'noruncode': [],
-                  'command': [],
-                  'pythoncmd': [],
-                  'outputtype':'text/plain',
-                  'env':None,
-                  'runmode': [],
-                  'pid': [],
-                  'pidcmd': [],
-                  'args': []}
-        actualCode = ''
-        newactualCode = ''
-        for line in code.splitlines():
-            orgline=line
-            line=self.forcejj2code(line)
-            if line==None or line.strip()=='': continue
-            if self._is_specialID(line):
-                if line.strip()[3:] == "noruncode":
-                    magics['noruncode'] += ['true']
-                    continue
-                elif line.strip()[3:] == "test":
-                    magics['test'] += ['true']
-                    continue
-                elif line.strip()[3:] == "overwritefile":
-                    magics['overwritefile'] += ['true']
-                    continue
-                elif line.strip()[3:] == "showpid":
-                    magics['showpid'] += ['true']
-                    continue
-                elif line.strip()[3:] == "repllistpid":
-                    magics['repllistpid'] += ['true']
-                    self.repl_listpid()
-                    continue
-                elif line.strip()[3:] == "replcmdmode":
-                    magics['replcmdmode'] += ['replcmdmode']
-                    continue
-                elif line.strip()[3:] == "replprompt":
-                    magics['replprompt'] += ['replprompt']
-                    continue
-                elif line.strip()[3:] == "onlyrunnotecmd":
-                    magics['onlyrunnotecmd'] += ['true']
-                    continue
-                elif line.strip()[3:] == "onlyruncmd":
-                    magics['onlyruncmd'] += ['true']
-                    continue
-                else:
-                    pass
-                findObj= re.search( r':(.*)',line)
-                if not findObj or len(findObj.group(0))<2:
-                    continue
-                key, value = line.strip()[3:].split(":", 2)
-                key = key.strip().lower()
-                if key == "runmode":
-                    if len(value)>0:
-                        magics[key] = value[re.search(r'[^/]',value).start():]
-                    else:
-                        magics[key] ='real'
-                elif key == "file":
-                    if len(value)>0:
-                        magics[key] += [value[re.search(r'[^/]',value).start():]]
-                    else:
-                        magics[key] +=['newfile']
-                elif key == "include":
-                    if len(value)>0:
-                        magics[key] = value
-                    else:
-                        magics[key] =''
-                        continue
-                    if len(magics['include'])>0:
-                        index1=line.find('##%')
-                        line=self.readcodefile(magics['include'],index1)
-                        actualCode += line + '\n'
-                elif key == "templatefile":
-                    index1=line.find('//%')
-                    if len(value)>0:
-                        magics[key] =value.split(" ",1)
-                    else:
-                        magics[key] =None
-                        continue
-                    templatefile=magics['templatefile'][0]
-                    if len(magics['templatefile'])>1:
-                        argsstr=magics['templatefile'][1]
-                        templateargsdict=self._filter_dict(argsstr)
-                    else:
-                        templateargsdict=None
-                    if len(magics['templatefile'])>0:
-                        line=self.readtemplatefile(templatefile,index1,templateargsdict)
-                        actualCode += line + '\n'
-                elif key == "pidcmd":
-                    magics['pidcmd'] = [value]
-                    if len(magics['pidcmd'])>0:
-                        findObj= value.split(",",1)
-                        if findObj and len(findObj)>1:
-                            pid=findObj[0]
-                            cmd=findObj[1]
-                            self.send_cmd(pid=pid,cmd=cmd)
-                elif key == "replsetip":
-                    magics['replsetip'] = value
-                elif key == "replchildpid":
-                    magics['replchildpid'] = value
-                elif key == "command" or key == "cmd":
-                    magics['command'] = [value]
-                    if len(magics['command'])>0:
-                        self.do_shell_command(magics['command'],env=magics['env'])
-                elif key == "pythoncmd":
-                    for flag in value.split():
-                        magics[key] += [flag]
-                    if len(magics['pythoncmd'])>0:
-                        self.do_Py_command(magics['pythoncmd'],magics=magics)
-                elif key == "env":
-                    envdict=self._filter_env(value)
-                    magics[key] =dict(envdict)
-                elif key == "outputtype":
-                    magics[key]=value
-                elif key == "args":
-                    # Split arguments respecting quotes
-                    for argument in re.findall(r'(?:[^\s,"]|"(?:\\.|[^"])*")+', value):
-                        magics['args'] += [argument.strip('"')]
-                else:
-                    #self.callISplugin(key,line)
-                    pass
-                # always add empty line, so line numbers don't change
-                # actualCode += '\n'
-            # keep lines which did not contain magics
-            else:
-                actualCode += line + '\n'
-        newactualCode=actualCode
-        if len(magics['file'])>0 :
-            newactualCode=''
-            for line in actualCode.splitlines():
-                if len(magics['test'])<1:
-                    line=self.cleantestcode(line)
-                if line=='':continue
-                line=self.callIDplugin(line)
-                if line=='':continue
-                line=self.cleandqm(line)
-                if line=='':continue
-                line=self.cleansqm(line)
-                if self.cleannotes(line)=='':
-                    continue
-                else:
-                    newactualCode += line + '\n'
-        return magics, newactualCode
     def _add_main(self, magics, code):
         tmpCode = re.sub(r"//.*", "", code)
         tmpCode = re.sub(r"/\*.*?\*/", "", tmpCode, flags=re.M|re.S)
@@ -771,41 +652,82 @@ class MyPythonKernel(Kernel):
             code = self.main_head + code + self.main_foot
             magics['cflags'] += ['-lm']
         return magics, code
+    def raise_plugin(self,code,magics,returncode=None,filename='',ifunc=1,ieven=1)->Tuple[bool,str]:
+        bcancel_exec=False
+        bretcancel_exec=False
+        retstr=''
+        for pluginlist in self.plugins:
+            for pkey,pvalue in pluginlist.items():
+                # print( pkey +":"+str(len(pvalue))+"\n")
+                for pobj in pvalue:
+                    newline=''
+                    try:
+                        # if key in pobj.getIDSptag(pobj):
+                        if ifunc==1 and ieven==1:
+                                bretcancel_exec,retstr=pobj.on_before_buildfile(pobj,code,magics)
+                        elif ifunc==2 and ieven==1:
+                                bretcancel_exec,retstr=pobj.on_before_compile(pobj,code,magics)
+                        elif ifunc==3 and ieven==1:
+                                bretcancel_exec,retstr=pobj.on_before_exec(pobj,code,magics)
+                        elif ifunc==1 and ieven==2:
+                                bretcancel_exec=pobj.on_after_buildfile(pobj,returncode,filename,magics)
+                        elif ifunc==2 and ieven==2:
+                                bretcancel_exec=pobj.on_after_compile(pobj,returncode,filename,magics)
+                        elif ifunc==3 and ieven==2:
+                                bretcancel_exec=pobj.on_after_exec(pobj,returncode,filename,magics)
+                        elif ifunc==3 and ieven==3:
+                                bretcancel_exec=pobj.on_after_completion(pobj,returncode,filename,magics)        
+                        bcancel_exec=bretcancel_exec & bcancel_exec
+                        if bcancel_exec:
+                            return bcancel_exec,""
+                    except Exception as e:
+                        self._log(pobj.getName(pobj)+"---"+str(e)+"\n")
+                    finally:pass
+        return bcancel_exec,retstr
     def do_execute(self, code, silent, store_history=True,
                    user_expressions=None, allow_stdin=True):
         try:
             self.silent = silent
-            magics, code = self._filter_magics(code)
-            if len(magics['replcmdmode'])>0:
+            # magics, code = self._filter_magics(code)
+            magics, code = self.mag.filter(code)
+            if len(self.addkey2dict(magics,'replcmdmode'))>0:
                 return self.send_replcmd(code, silent, store_history=True,
                     user_expressions=None, allow_stdin=False)
-            if len(magics['noruncode'])>0 and ( len(magics['command'])>0 or len(magics['pythoncmd'])>0):
+            if (len(self.addkey2dict(magics,'noruncode'))>0 
+                and ( len(self.addkey2dict(magics,'command'))>0 
+                or len(self.addkey2dict(magics,'pythoncmd'))>0)):
                 return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
             # if len(magics['file'])<1:
             #     magics, code = self._add_main(magics, code)
+            return_code=0
+            fil_ename=''
+            bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,1,1)
+            if bcancel_exec:return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
             with self.new_temp_file(suffix='.py',dir=os.path.abspath('')) as source_file:
                 source_file.write(code)
                 source_file.flush()
                 newsrcfilename=source_file.name
-                if len(magics['file'])>0:
-                    newsrcfilename = self._fileshander(magics['file'],newsrcfilename,magics)
-                    # newsrcfilename = magics['file'][0]
-                    # newsrcfilename = os.path.join(os.path.abspath(''),newsrcfilename)
-                    # if os.path.exists(newsrcfilename):
-                    #     if len(magics['overwritefile'])<1:
-                    #         newsrcfilename +=".new.py"
-                    # if not os.path.exists(os.path.dirname(newsrcfilename)) :
-                    #     os.makedirs(os.path.dirname(newsrcfilename))
-                    # os.rename(source_file.name,newsrcfilename)
-                    self._write_to_stdout("[MyPythonkernel] Info:file "+ newsrcfilename +" created successfully\n")
-            if len(magics['noruncode'])>0:
+                fil_ename=newsrcfilename
+                return_code=True
+                # Generate new src file
+                bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,1,2)
+                if bcancel_exec:return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
+                if len(self.addkey2dict(magics,'file'))>0:
+                        fil_ename=magics['file'][0]
+                else: fil_ename=source_file.name
+            if len(self.addkey2dict(magics,'noruncode'))>0:
                 return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
-            self._write_to_stdout("The process :"+newsrcfilename+"\n")
-            p = self.create_jupyter_subprocess(['python',newsrcfilename]+ magics['args'],cwd=None,shell=False,env=magics['env'])
+            bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,3,1)
+            if bcancel_exec:return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
+            self._write_to_stdout("The process :"+fil_ename+"\n")
+            p = self.create_jupyter_subprocess(['python',fil_ename]+ magics['args'],cwd=None,shell=False,env=self.addkey2dict(magics,'env'))
             #p = self.create_jupyter_subprocess([binary_file.name]+ magics['args'],cwd=None,shell=False)
             #p = self.create_jupyter_subprocess([self.master_path, binary_file.name] + magics['args'],cwd='/tmp',shell=True)
             self.g_rtsps[str(p.pid)]=p
-            if len(magics['showpid'])>0:
+            return_code=p.returncode
+            bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,3,2)
+            if bcancel_exec:return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
+            if len(self.addkey2dict(magics,'showpid'))>0:
                 self._write_to_stdout("The process PID:"+str(p.pid)+"\n")
             while p.poll() is None:
                 p.write_contents(magics)
@@ -815,11 +737,14 @@ class MyPythonKernel(Kernel):
             p._stderr_thread.join()
             # del self.g_rtsps[str(p.pid)]
             p.write_contents(magics)
+            return_code=p.returncode
+            bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,3,3)
+            if bcancel_exec:return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
             self.cleanup_files()
             if p.returncode != 0:
                 self._write_to_stderr("[MyPythonkernel] Executable exited with code {}".format(p.returncode))
         except Exception as e:
-            self._write_to_stderr("[MyPythonkernel] Error "+str(e))
+            self._log(""+str(e),3)
         return {'status': 'ok', 'execution_count': self.execution_count, 'payload': [], 'user_expressions': {}}
     def do_shutdown(self, restart):
         self.g_chkreplexit=False
@@ -855,6 +780,7 @@ class MyPythonKernel(Kernel):
          "7":[],
          "8":[],
          "9":[]}
+    plugins=[ISplugins,IDplugins,IBplugins]
     def pluginRegister(self,obj):
         if obj==None:return
         try:
@@ -870,20 +796,23 @@ class MyPythonKernel(Kernel):
             pass
         pass
     def pluginISList(self):
+        self._log("---------pluginISList--------\n")
         for key,value in self.ISplugins.items():
             # print( key +":"+str(len(value))+"\n")
             for obj in value:
-                print(obj.getName(obj)+"\n")
+                self._log(obj.getName(obj)+"\n")
     def pluginIDList(self):
+        self._log("---------pluginIDList--------\n")
         for key,value in self.IDplugins.items():
             # print( key +":"+str(len(value))+"\n")
             for obj in value:
-                print(obj.getName(obj)+"\n")
+                self._log(obj.getName(obj)+"\n")
     def pluginIBList(self):
+        self._log("---------pluginIBList--------\n")
         for key,value in self.IBplugins.items():
             # print( key +":"+str(len(value))+"\n")
             for obj in value:
-                print(obj.getName(obj)+"\n")
+                self._log(obj.getName(obj)+"\n")
     def onkernelshutdown(self,restart):
         for key,value in self.IDplugins.items():
             # print( key +":"+str(len(value))+"\n")
@@ -1005,17 +934,18 @@ class MyPythonKernel(Kernel):
                 except Exception as e:
                     pass
                 finally:pass
-    def callISplugin(self,key,line):
-        newline=line
+    def callISplugin(self,key,value,magics):
+        newline=value
         for key,value in self.IDplugins.items():
             # print( key +":"+str(len(value))+"\n")
             for obj in value:
                 try:
-                    newline=obj.on_ISpCodescanning(obj,key,newline)
+                    newline=obj.on_ISpCodescanning(obj,key,value,magics)
                     if newline=='':break
                 except Exception as e:
                     pass
                 finally:pass
+        return ''
     def callIDplugin(self,line):
         newline=line
         for key,value in self.IDplugins.items():
