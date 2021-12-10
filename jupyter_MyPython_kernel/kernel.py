@@ -1073,7 +1073,7 @@ class MyPythonKernel(MyKernel):
         bcancel_exec=False
         retinfo=self.get_retinfo()
         retstr=''
-        p = self.create_jupyter_subprocess(['python',fil_ename]+ magics['args'],cwd=None,shell=False,env=self.addkey2dict(magics,'env'))
+        p = self.create_jupyter_subprocess(['python3',fil_ename]+ magics['args'],cwd=None,shell=False,env=self.addkey2dict(magics,'env'))
         #p = self.create_jupyter_subprocess([binary_file.name]+ magics['args'],cwd=None,shell=False)
         #p = self.create_jupyter_subprocess([self.master_path, binary_file.name] + magics['args'],cwd='/tmp',shell=True)
         self.g_rtsps[str(p.pid)]=p
