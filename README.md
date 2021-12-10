@@ -1,5 +1,5 @@
 # MyPython kernel for Jupyter
-[Example](https://github.com/nufeng1999/jupyter-MyPython-kernel/blob/master/example/jupyter_dart_readme.ipynb "Example")
+[Example](https://github.com/nufeng1999/jupyter-MyPython-kernel/blob/master/example/jupyter_python_readme.ipynb "Example")
 * Make sure you have the following requirements installed:
   * 
   * jupyter
