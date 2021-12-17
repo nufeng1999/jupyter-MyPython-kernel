@@ -23,7 +23,6 @@ class MyPycommand(IStag):
     def on_shutdown(self, restart):
         return
     def on_ISpCodescanning(self,key, value,magics,line) -> str:
-        # self.kobj._write_to_stdout(line+" on_ISpCodescanning\n")
         self.kobj.addkey2dict(magics,'pycmd')
         return self.commandhander(self,key, value,magics,line)
     def on_Codescanning(self,magics,code)->Tuple[bool,str]:
@@ -44,8 +43,9 @@ class MyPycommand(IStag):
     def on_after_completion(self,returncode,execfile,magics)->bool:
         return False
     def commandhander(self,key, value,magics,line):
-        # self.kobj._write_to_stdout(value+"\n")
-        magics['pycmd'] = [value]
+        magics['pycmd'] = value.strip()
         if len(magics['pycmd'])>0:
-            self.kobj.do_shell_command(magics['pycmd'],env=magics['env'])
+            env=self.kobj.get_magicsSvalue(magics,'env')
+            if len(env)<1:env=None
+            self.kobj.do_Py_command(magics['pycmd'],env=env,magics=magics)
         return ''
