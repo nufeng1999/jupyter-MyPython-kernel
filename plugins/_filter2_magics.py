@@ -460,6 +460,7 @@ class Magics():
             else:
                 actualCode += line + '\n'
         newactualCode=actualCode
+        # self.kobj._logln(newactualCode)
         bcancel_exec,newcode=self.raise_ICodescan(magics,newactualCode)
         if not bcancel_exec:
             newactualCode=newcode
@@ -484,4 +485,6 @@ class Magics():
                         newactualCode += line + '\n'
                 except Exception as e:
                     self.kobj._log(str(e),3)
+        
+        # self.kobj._logln(newactualCode)
         return magics, newactualCode
