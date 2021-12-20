@@ -174,16 +174,20 @@ class RealTimeSubprocess(subprocess.Popen):
                 self._write_to_stdout(contents,magics)
     def wait_end(self,magics):
         while self.poll() is None:
-            if self.kobj.get_magicsSvalue(magics,"outputtype").startswith("image"):
-                continue
-            self.write_contents(magics)
+            if self.kobj.get_magicsSvalue(magics,"outputtype").startswith("text"):
+                self.write_contents(magics)
+            pass
+            continue
         self.write_contents(magics)
-        self._write_to_stdout("The process end:"+str(self.pid)+"\n",magics)
-        self.write_contents(magics)
+        if self.kobj==None:
+            self._write_to_stdout("The process end:"+str(self.pid)+"\n",magics)
+        else:
+            self.kobj._logln("The process end:"+str(self.pid))
+        # self.write_contents(magics)
         # wait for threads to finish, so output is always shown
         self._stdout_thread.join()
         self._stderr_thread.join()
-        self.write_contents(magics)
+        # self.write_contents(magics)
         return self.returncode
 class MyKernel(Kernel):
     implementation = 'jupyter-MyPython-kernel'
@@ -411,7 +415,7 @@ echo "OK"
     def cleanCnotes(self,code):
         return re.sub(r"//.*", "", code)
     def cleannotes(self,line):
-        return '' if (not self._is_specialID(line)) and (line.lstrip().startswith('##') or line.lstrip().startswith('//')) else line
+        return '' if (not self._is_specialID(line)) and (line.lstrip().startswith('## ') or line.lstrip().startswith('//')) else line
     isdqm=False##清除双引号多行注释
     def cleandqmA(self,code):
         return re.sub(r"\"\"\".*?\"\"\"", "", code, flags=re.M|re.S)
@@ -545,16 +549,16 @@ echo "OK"
                 # self._logln(base64.encodebytes(contents))
                 # contents=base64.encodebytes(contents)
                 # contents=urllib.parse.quote(base64.b64encode(contents))
-                header="<div><img alt=\"Output\" src=\"data:image/png;base64,"
+                header="<div><img alt=\"Output\" src=\"data:"+mimetype+";base64,"
                 end="\"></div>"
                 contents=header+base64.encodebytes(contents).decode( errors='ignore')+end
                 mimetype='text/html'
-                metadata = {
+                metadata = {mimetype:{}}
                     # 'text/html' : {
                     # 'width': 640,
                     # 'height': 480
                     # }
-                    }
+                    # }
         except Exception as e:
             self._logln("_write_display_data err "+str(e),3)
             return
@@ -876,7 +880,7 @@ echo "OK"
             bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,1,2)
             if bcancel_exec:return  self.get_retinfo()
             fil_ename=magics['codefilename']
-            if len(self.addkey2dict(magics,'noruncode'))>0:
+            if len(self.get_magicsbykey(magics,'noruncode'))>0:
                 bcancel_exec=True
                 return self.get_retinfo()
             bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,2,1)
@@ -887,7 +891,7 @@ echo "OK"
             if bcancel_exec:return  retinfo
             bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,2,2)
             if bcancel_exec:return  self.get_retinfo()
-            if len(self.addkey2dict(magics,'onlycompile'))>0:
+            if len(self.get_magicsbykey(magics,'onlycompile'))>0:
                 self._log("only run compile \n")
                 bcancel_exec=True
                 return retinfo
@@ -924,7 +928,7 @@ echo "OK"
             bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,1,2)
             if bcancel_exec:return  self.get_retinfo()
             fil_ename=magics['codefilename']
-            if len(self.addkey2dict(magics,'noruncode'))>0:
+            if len(self.get_magicsbykey(magics,'noruncode'))>0:
                 bcancel_exec=True
                 return self.get_retinfo()
             bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,2,1)
@@ -935,7 +939,7 @@ echo "OK"
             if bcancel_exec:return  self.get_retinfo()
             bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,2,2)
             if bcancel_exec:return  self.get_retinfo()
-            if len(self.addkey2dict(magics,'onlycompile'))>0:
+            if len(self.get_magicsbykey(magics,'onlycompile'))>0:
                 self._log("only run compile \n")
                 bcancel_exec=True
                 return retinfo
@@ -969,7 +973,7 @@ echo "OK"
             bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,1,2)
             if bcancel_exec:return  self.get_retinfo()
             fil_ename=magics['codefilename']
-            if len(self.addkey2dict(magics,'noruncode'))>0:
+            if len(self.get_magicsbykey(magics,'noruncode'))>0:
                 bcancel_exec=True
                 return self.get_retinfo()
             bcancel_exec,retstr=self.raise_plugin(code,magics,return_code,fil_ename,3,1)
@@ -1031,7 +1035,7 @@ echo "OK"
         retinfo=self.get_retinfo()
         if len(code.strip())<1:return retinfo
         magics, code = self.mag.filter(code)
-        if (len(self.get_magicsBvalue(magics,'onlyrunmagics'))>0 or len(self.get_magicsBvalue(magics,'onlyruncmd'))>0):
+        if (len(self.get_magicsbykey(magics,'onlyrunmagics'))>0 or len(self.get_magicsbykey(magics,'onlyruncmd'))>0):
             bcancel_exec=True
             return retinfo
         if len(self.get_magicsBvalue(magics,'replcmdmode'))>0:
