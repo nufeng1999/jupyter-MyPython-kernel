@@ -1261,7 +1261,7 @@ class MyPythonKernel(MyKernel):
     implementation = 'jupyter-MyPython-kernel'
     implementation_version = '1.0'
     language = 'Python'
-    language_version = sys.version.split()[0]
+    language_version = ''
     language_info = {'name': 'python',
                      'version': sys.version.split()[0],
                      'mimetype': 'text/x-python',
