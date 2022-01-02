@@ -166,6 +166,18 @@ class Magics():
         for argument in re.findall(r'(?:[^\s,"]|"(?:\\.|[^"])*")+', value):
             magics['_st']['term'] += [argument.strip('"')]
         return ''
+    def kfn_fifoname(self,key,value,magics,line):
+        magics['_st']['fifoname']=value.strip()
+        return ''
+    def kfn_fifofile(self,key,value,magics,line):
+        magics['_st']['fifofile']=value.strip()
+        return ''
+    def kfn_stdoutd(self,key,value,magics,line):
+        magics['_st']['stdout->']=value.strip()
+        return ''
+    def kfn_stdind(self,key,value,magics,line):
+        magics['_st']['stdin<-']=value.strip()
+        return ''
     def kfn_fileencode(self,key,value,magics,line):
         magics['_st']['fileencode']=value.strip()
         return ''
@@ -216,6 +228,10 @@ class Magics():
         self.addmagicsSkey(magics,'replchildpid',self.kfn_replchildpid)
         self.addmagicsSkey(magics,'pidcmd',self.kfn_pidcmd)
         self.addmagicsSkey(magics,'term',self.kfn_term)
+        self.addmagicsSkey(magics,'fifoname',self.kfn_fifoname)
+        self.addmagicsSkey(magics,'fifofile',self.kfn_fifofile)
+        self.addmagicsSkey(magics,'stdout->',self.kfn_stdoutd)
+        self.addmagicsSkey(magics,'stdin<-',self.kfn_stdind)
         self.addmagicsSkey(magics,'outputtype',self.kfn_outputtype)
         self.addmagicsSkey(magics,'fileencode',self.kfn_fileencode)
         self.addmagicsSkey(magics,'outencode',self.kfn_outencode)
@@ -243,6 +259,8 @@ class Magics():
                 'runinterm':'',
                 'replcmdmode':'',
                 'replprompt':'',
+                'stdout2fifo':'',
+                'fifo2stdin':'',
                 'discleannotes':''
                 },
                 '_st':{
@@ -255,6 +273,10 @@ class Magics():
                 'runmode':[],
                 'replsetip':[],
                 'replchildpid':"0",
+                'fifoname':"",
+                'fifofile':"",
+                'stdout->':'',
+                'stdin<-':'',
                 'pidcmd':[],
                 'term':[],
                 'fileencode':'UTF-8',
@@ -274,6 +296,8 @@ class Magics():
                 'runinterm':[],
                 'replcmdmode':[],
                 'replprompt':[],
+                'stdout2fifo':[],
+                'fifo2stdin':[],
                 'discleannotes':[]
                 },
                 '_stf':{
@@ -286,6 +310,10 @@ class Magics():
                 'runmode':[],
                 'replsetip':[],
                 'replchildpid':[],
+                'fifoname':[],
+                'fifofile':[],
+                'stdout->':[],
+                'stdin<-':[],
                 'pidcmd':[],
                 'term':[],
                 'fileencode':[],
