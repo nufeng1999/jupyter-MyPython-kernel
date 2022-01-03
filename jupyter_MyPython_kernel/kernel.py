@@ -206,11 +206,10 @@ class RealTimeSubprocess(subprocess.Popen):
                 res += queue.get_nowait()
                 size -= 1
             return res
-        
         if self.fifo2stdin:
-            stdout_contents = read_all_from_queue(self._fiforead_queue)
-            if stdout_contents:
-                self.stdin.write(stdout_contents)
+            sh_contents = read_all_from_queue(self._fiforead_queue)
+            if sh_contents:
+                self.stdin.write(sh_contents)
         stderr_contents = read_all_from_queue(self._stderr_queue)
         if stderr_contents:
             if self.kobj!=None:
@@ -218,37 +217,11 @@ class RealTimeSubprocess(subprocess.Popen):
             else:
                 self._write_to_stderr(stderr_contents.decode('UTF-8', errors='ignore'))
         stdout_contents = read_all_from_queue(self._stdout_queue)
-        if stdout_contents:
-            if self.kobj.get_magicsSvalue(magics,"outputtype").startswith("image"):
-                self._write_to_stdout(stdout_contents,magics)
-                ##reset outputtype
-                magics['_st']["outputtype"]="text/plain"
-                return
-            contents=''
-            if self.outencode=='UTF-8':
-                contents = stdout_contents.decode('UTF-8', errors='ignore')
-            else:
-                contents = stdout_contents.decode(self.outencode, errors='ignore')
-            # if there is input request, make output and then
-            # ask frontend for input
-            start = contents.find(self.__class__.inputRequest)
-            if(start >= 0):
-                contents = contents.replace(self.__class__.inputRequest, '')
-                if(len(contents) > 0):
-                    self._write_to_stdout(contents,magics)
-                readLine = ""
-                while(len(readLine) == 0):
-                    readLine = self._read_from_stdin()
-                # need to add newline since it is not captured by frontend
-                readLine += "\n"
-                self.stdin.write(readLine.encode())
-            else:
-                if self.stdout2fifo:
-                    self.fifoproc(self.fifoname,self.stdout2fifo,self.fifo2stdin,stdout_contents);
-                self._write_to_stdout(contents,magics)
+        self.out_stdout_contents(stdout_contents,magics)
     def fifo_threadproc(self,fifoname=None,stdout2fifo=False,fifo2stdin=False):
         if (fifo2stdin or stdout2fifo) and (fifoname!=None and len(fifoname)>0):
             # if self.flock==None:self.flock=CFileLock(fifoname)
+            if self.kobj.flock==None:self.kobj.flock=CFileLock(fifoname)
             if stdout2fifo:
                 
                 self._sendend=False
@@ -260,25 +233,11 @@ class RealTimeSubprocess(subprocess.Popen):
             if fifo2stdin:
                 self._fiforead_queue = Queue()
                 self.kobj._logln("启动内存通信通道:"+fifoname)
-                self._fiforead_thread = Thread(target=RealTimeSubprocess._read_data, args=(self,self._fiforead_queue,fifoname,4096))
+                self._fiforead_thread = Thread(target=RealTimeSubprocess._read_data, args=(self,self._fiforead_queue,fifoname,4096,self.outencode))
                 self._fiforead_thread.daemon = True
                 self._fiforead_thread.start()
     @staticmethod            
     def _send_data(robj,queue,name,memsize=1024):
-        def waitreadend(m,timeout):
-            cmdstart_time = time.time()
-            while True:
-                flag=b''
-                m.seek(0)
-                flag=m.read(1)
-                if flag!=b'\x00':
-                    run_time = time.time() - cmdstart_time
-                    if run_time > timeout: 
-                        robj.kobj._logln("等待读超时")
-                        break
-                    time.sleep(1/1000)
-                    continue
-                break
         def read_all_from_queue(queue,n):
             robj._sendend=False
             res = b''
@@ -297,44 +256,11 @@ class RealTimeSubprocess(subprocess.Popen):
                 robj._sendend=True
                 time.sleep(1/1000)
                 continue
-            with contextlib.closing(mmap.mmap(-1, memsize, tagname=name, access=mmap.ACCESS_DEFAULT)) as m:
-                waitreadend(m,1)
-                m.seek(0)
-                m.write(b'\x02')
-                m.flush()
-                m.seek(1)
-                m.write(content)
-                m.flush()
-                m.seek(0)
-                m.write(b'\x01')
-                m.flush()
-                time.sleep(1/1000)
-                robj._sendend=True
-                # robj.kobj._logln("发送数据完毕")
-        robj.kobj._logln("发送数据到内存通道({0})的线程退出了。".format(name))
-            # robj._sendend=True
+            bret=robj.kobj.sendmsg2sh(name,memsize,content,robj)
     @staticmethod
-    def _read_data(robj,queue,name,memsize=1024):
+    def _read_data(robj,queue,name,memsize=1024,outencode='UTF-8'):
         while not robj._stop_read_data:
-            flag=b''
-            with contextlib.closing(mmap.mmap(-1, memsize, tagname=name, access=mmap.ACCESS_DEFAULT)) as m:
-                m.seek(0)
-                flag=m.read(1)
-                if flag!=b'\x01':
-                    # print("wait...")
-                    time.sleep(1/1000)
-                    continue
-                m.seek(0)
-                m.write(b'\x02')
-                m.flush()
-                m.seek(1)
-                content = m.read()
-                # content=content.decode('UTF-8', errors='ignore').strip(b'\x00'.decode())
-                queue.put(content)
-                m.seek(0)
-                m.write(b'\x00'*memsize)
-                m.flush()
-                time.sleep(1/1000)
+            bret=robj.kobj.readdatafromsh(queue,name,memsize=memsize,outencode='UTF-8')
     def write2stdin(self,queue):
         def read_all_from_queue(queue):
             res = b''
@@ -362,7 +288,34 @@ class RealTimeSubprocess(subprocess.Popen):
                 # self._write_to_stdout("fifo2stdin--->"+str(fifo2stdin)+"\n")
                 self.foflag=True
                 self.write2stdin(self._fiforead_queue,fifoname)
-        
+    def out_stdout_contents(self,stdout_contents,magics):
+        if stdout_contents:
+            if self.kobj.get_magicsSvalue(magics,"outputtype").startswith("image"):
+                self._write_to_stdout(stdout_contents,magics)
+                magics['_st']["outputtype"]="text/plain"
+                return
+            contents=''
+            if self.outencode=='UTF-8':
+                contents = stdout_contents.decode('UTF-8', errors='ignore')
+            else:
+                contents = stdout_contents.decode(self.outencode, errors='ignore')
+            # if there is input request, make output and then
+            # ask frontend for input
+            start = contents.find(self.__class__.inputRequest)
+            if(start >= 0):
+                contents = contents.replace(self.__class__.inputRequest, '')
+                if(len(contents) > 0):
+                    self._write_to_stdout(contents,magics)
+                readLine = ""
+                while(len(readLine) == 0):
+                    readLine = self._read_from_stdin()
+                # need to add newline since it is not captured by frontend
+                readLine += "\n"
+                self.stdin.write(readLine.encode())
+            else:
+                if self.stdout2fifo:
+                    self.fifoproc(self.fifoname,self.stdout2fifo,self.fifo2stdin,stdout_contents);
+                self._write_to_stdout(contents,magics)
     def wait_end(self,magics):
         while self.poll() is None:
             if self.kobj.get_magicsSvalue(magics,"outputtype").startswith("text"):
@@ -420,6 +373,7 @@ class MyKernel(Kernel):
     main_foot = "\nreturn 0;\n}"
     def __init__(self, *args, **kwargs):
         super(MyKernel, self).__init__(*args, **kwargs)
+        self.flock=None
         self._allow_stdin = True
         self.readOnlyFileSystem = False
         self.bufferedOutput = True
@@ -1359,16 +1313,19 @@ class MyKernel(Kernel):
         magics, code = self.mag.filter(code)
         if (len(self.get_magicsbykey(magics,'onlyrunmagics'))>0 or len(self.get_magicsbykey(magics,'onlyruncmd'))>0):
             bcancel_exec=True
+            self.smsgafterexec(magics)
             return retinfo
         if len(self.get_magicsBvalue(magics,'replcmdmode'))>0:
             bcancel_exec=True
             retinfo= self.send_replcmd(code, silent, store_history,user_expressions, allow_stdin)
+            self.smsgafterexec(magics)
             return retinfo
         
         if(len(self.get_magicsSvalue(magics,'runprg'))>0):
             retinfo=self.do_execute_runprg(code, magics,silent, store_history,
                    user_expressions, allow_stdin)
             self.cleanup_files()
+            self.smsgafterexec(magics)
             return retinfo
         if(self.runfiletype=='script'):
             retinfo=self.do_execute_script(code, magics,silent, store_history,
@@ -1380,15 +1337,159 @@ class MyKernel(Kernel):
             retinfo=self.do_execute_script(code, magics,silent, store_history,
                    user_expressions, allow_stdin)
         
-        
+        self.smsgafterexec(magics)
         self.cleanup_files()
         return retinfo
+    def smsgafterexec(self,magics):
+        smafterexec=self.get_magicsSvalue(magics,'smafterexec')
+        if len(smafterexec)<1 :return
+        msg=''
+        fifoname=''
+        outencode='UTF-8'
+        outencode=self.get_outencode(magics)
+        if(outencode==None or len(outencode)<0):outencode='UTF-8'
+        for sli in smafterexec:
+            if len(sli.strip())<1:continue
+            li=sli.split(" ", 1)
+            if len(li)<2:continue
+            fifoname=li[0]
+            msg=li[1]+"\n"
+            self.sendmsg(fifoname,msg,outencode)
+    def sendmsg(self,fifoname,msg='',outencode='UTF-8'):
+        if len(fifoname.strip())<1 or len(msg)<1 :return
+        contents=msg.encode(outencode, errors='ignore')
+        
+        self.sendmsg2sh(fifoname.strip(),4096,contents)
 ##
     def do_shutdown(self, restart):
         self.g_chkreplexit=False
         self.chk_replexit_thread.join()
         # self.onkernelshutdown()
         self.cleanup_files()
+##
+    def sendmsg2sh(self,name,memsize,content,robj=None):
+        if self.flock==None:self.flock=CFileLock(name)
+        def iswrite_state(m,bsf=b'\x00'):
+            ret=False
+            flag=b''
+            m.seek(0)
+            flag=m.read(1)
+            if flag==bsf:return True
+            return ret
+        def waitwrite_state(m,timeout):
+            self.timeout(to=timeout,
+                retryfunc=iswrite_state,
+                condfunc=None,
+                argdict={"args":(m,b'\x00'),
+                    "kwargs":None,
+                    "cargs":None,
+                    "ckwargs":None
+                })
+        def writedata(m,content,robj=None):
+            ret=False
+            if self.flock.lock():
+                waitwrite_state(m,1)
+                m.seek(0)
+                m.write(b'\x02')
+                m.flush()
+                m.seek(1)
+                m.write(content)
+                m.flush()
+                m.seek(0)
+                m.write(b'\x01')
+                m.flush()
+                time.sleep(1/1000)
+                # m.seek(1)
+                # w=m.read()
+                # ww=w.decode()
+                # if robj==None:
+                #     self._logln(ww.strip(b'\x00'.decode()))
+                if robj!=None:robj._sendend=True
+                self.flock.unlock()
+                ret=True
+            return ret
+        bret=False
+        with contextlib.closing(mmap.mmap(-1, memsize, tagname=name, access=mmap.ACCESS_DEFAULT)) as m:
+            bret=self.timeout(to=5,
+                retryfunc=writedata,
+                condfunc=None,
+                argdict={"args":(m,content,None),
+                    "kwargs":None,
+                    "cargs":None,
+                    "ckwargs":None
+                })
+        return bret
+    def readdatafromsh(self,queue,name,memsize=1024,outencode='UTF-8'):
+        def isread_state(m,bsf=b'\x01'):
+            ret=False
+            flag=b''
+            m.seek(0)
+            flag=m.read(1)
+            if flag==bsf:return True
+            return ret
+        def waitread_state(m,timeout):
+            return self.timeout(to=timeout,
+                retryfunc=isread_state,
+                condfunc=None,
+                argdict={"args":(m,b'\x01'),
+                    "kwargs":None,
+                    "cargs":None,
+                    "ckwargs":None
+                })
+        def readdata(m,queue,memsize):
+            ret=False
+            if self.flock.lock():
+                bret=waitread_state(m,1)
+                if not bret:
+                    self.flock.unlock()
+                    return 
+                m.seek(0)
+                m.write(b'\x02')
+                m.flush()
+                m.seek(1)
+                content = m.read()
+                cstr=content.decode(outencode, errors='ignore').strip(b'\x00'.decode())
+                if (len(cstr)>1):
+                    queue.put(cstr.encode(outencode, errors='ignore'))
+                m.seek(0)
+                m.write(b'\x00'*memsize)
+                m.flush()
+                time.sleep(1/1000)
+                self.flock.unlock()
+                ret=True
+            return ret
+        bret=False
+        with contextlib.closing(mmap.mmap(-1, memsize, tagname=name, access=mmap.ACCESS_DEFAULT)) as m:
+            bret=self.timeout(to=5,
+                retryfunc=readdata,
+                condfunc=None,
+                argdict={"args":(m,queue,memsize),
+                    "kwargs":None,
+                    "cargs":None,
+                    "ckwargs":None
+                })
+        return bret
+    def timeout(self,to=60,retryfunc=None,condfunc=None,argdict=
+                {"args":None,
+                 "kwargs":None,
+                 "cargs":None,
+                 "ckwargs":None
+                }):
+        bret=False
+        cmdstart_time = time.time()
+        while True:
+            try:
+                if condfunc!=None and condfunc(*argdict["cargs"]):break
+                run_time = time.time() - cmdstart_time
+                if run_time > to:break
+                time.sleep(1/1000)
+                if retryfunc!=None and retryfunc(*argdict["args"]):
+                    bret=True
+                    break
+                continue
+            except Exception as e:
+                break
+        return bret
 ##
     ISplugins={"0":[],
          "1":[],
