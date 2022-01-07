@@ -31,11 +31,12 @@ class MyFile(IStag):
         try:
             self.kobj.addkey2dict(magics,'file')
             if len(value)>0:
+                self.kobj._logln(value)
                 magics[key] += [value[re.search(r'[^/]',value).start():]]
             else:
                 magics[key] +=['newfile']
         except Exception as e:
-            self.kobj._log(str(e),2)
+            self.kobj._logln(str(e),2)
         return ''
     ##在代码预处理前扫描代码时调用    
     def on_Codescanning(self,magics,code)->Tuple[bool,str]:
