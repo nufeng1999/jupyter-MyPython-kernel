@@ -13,7 +13,6 @@ from shutil import copyfile,move
 from urllib.request import urlopen
 import socket
 import copy
-import zerorpc
 import mmap
 import contextlib
 import atexit
@@ -43,6 +42,11 @@ import inspect
 from . import ipynbfile
 from plugins.ISpecialID import IStag,IDtag,IBtag,ITag,ICodePreproc
 from plugins._filter2_magics import Magics
+try:
+    zerorpc=__import__("zerorpc")
+    # import zerorpc
+except:
+    pass
 fcntl = None
 msvcrt = None
 bLinux = True
@@ -53,7 +57,8 @@ else:
     msvcrt = __import__('msvcrt')
     bLinux = False
 from .MyKernel import MyKernel
-class MyPythonKernel(MyKernel):
+from .IMyKernel import IMyKernel
+class MyPythonKernel(MyKernel,IMyKernel):
     implementation = 'jupyter-MyPython-kernel'
     implementation_version = '1.0'
     language = 'Python'
