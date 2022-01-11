@@ -1,7 +1,5 @@
-## %file:src/file.py
-## %kcmd:list
 from typing import Dict, Tuple, Sequence,List
-from .ISpecialID import IStag,IDtag,IBtag,ITag
+from plugins.ISpecialID import IStag,IDtag,IBtag,ITag
 import re
 import os
 from shutil import copyfile,move
@@ -31,12 +29,11 @@ class MyFile(IStag):
         try:
             self.kobj.addkey2dict(magics,'file')
             if len(value)>0:
-                self.kobj._logln(value)
                 magics[key] += [value[re.search(r'[^/]',value).start():]]
             else:
                 magics[key] +=['newfile']
         except Exception as e:
-            self.kobj._logln(str(e),2)
+            self.kobj._log(str(e),2)
         return ''
     ##在代码预处理前扫描代码时调用    
     def on_Codescanning(self,magics,code)->Tuple[bool,str]:
@@ -71,7 +68,6 @@ class MyFile(IStag):
         else:
             magics[str(key)] +=['newfile']
         return ''
-
     def _fileshander(self,files:List,srcfilename,magics)->str:
         index=-1
         fristfile=srcfilename
@@ -81,7 +77,7 @@ class MyFile(IStag):
                 newsrcfilename = os.path.join(os.path.abspath(''),newsrcfilename)
                 if os.path.exists(newsrcfilename):
                     if magics!=None and len(self.kobj.addkey2dict(magics,'overwritefile'))<1:
-                        newsrcfilename +=(".new"+self.kobj.language_info['file_extension'])
+                        newsrcfilename +=(".new"+self.kobj.get_language_info()['file_extension'])
                 if not os.path.exists(os.path.dirname(newsrcfilename)) :
                     os.makedirs(os.path.dirname(newsrcfilename))
                 if index==0:
