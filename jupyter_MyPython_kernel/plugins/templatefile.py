@@ -1,12 +1,11 @@
 import typing as t
 from typing import Dict, Tuple, Sequence,List
-from .ISpecialID import IStag,IDtag,IBtag,ITag
+from plugins.ISpecialID import IStag,IDtag,IBtag,ITag
 import os
 class MyTemplatefile(IStag):
     kobj=None
     def getName(self) -> str:
         # self.kobj._write_to_stdout("setKernelobj setKernelobj setKernelobj\n")
-        
         return 'MyTemplatefile'
     def getAuthor(self) -> str:
         return 'Author'

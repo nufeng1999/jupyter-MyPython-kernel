@@ -1,6 +1,5 @@
-## %file:src/filelist.py
 from typing import Dict, Tuple, Sequence,List
-from .ISpecialID import IStag,IDtag,IBtag,ITag
+from plugins.ISpecialID import IStag,IDtag,IBtag,ITag
 import re
 import os
 from shutil import copyfile,move
@@ -55,4 +54,3 @@ class MyFileList(IStag):
     def on_after_completion(self,returncode,execfile,magics)->bool:
         magics['filelist']=[]
         return False
-        
