@@ -3,6 +3,7 @@
 ##
 from ipykernel.kernelbase import Kernel
 from .MyMagics import *
+import logging
 from plugins._filter2_magics import Magics
 import platform
 import sys
@@ -33,6 +34,8 @@ class MyKernel(Kernel):
         self.runfiletype = 'script'
         self.kernelinfo = '[MyKernel]'
         self.mymagics = MyMagics(jkobj=self, runfiletype=self.runfiletype)
+        self._log:logging.Logger=self.log
+        print("--------------{}----------------".format(self.kernelinfo),file=sys.__stdout__)
     def get_language_info(self):
         return self.language_info
     def get_runfiletype(self) -> str:
